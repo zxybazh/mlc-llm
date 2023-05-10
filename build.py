@@ -39,6 +39,7 @@ def _parse_args():
     )
     args.add_argument("--debug-dump", action="store_true", default=False)
     args.add_argument("--debug-load-script", action="store_true", default=False)
+    args.add_argument("--skip-param-dump", action="store_true", default=False)
 
     args.add_argument(
         "--llvm-mingw",
@@ -244,7 +245,8 @@ def mod_transform_before_build(
     debug_dump_script(mod_transform, "mod_lift_params.py", args)
 
     new_params = utils.transform_params(mod_transform, model_params)
-    utils.save_params(new_params, args.artifact_path)
+    if not args.skip_param_dump:
+        utils.save_params(new_params, args.artifact_path)
     return mod_deploy
 
 
