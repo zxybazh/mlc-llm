@@ -8,10 +8,12 @@ from typing import Any, Dict, List
 import tvm
 from tvm import meta_schedule as ms
 from tvm import relax
+from tvm.relax.backend.pattern_registry import get_pattern
 
 import mlc_llm
 from mlc_llm import utils
 from mlc_llm.relax_model import gpt_neox, llama, moss
+from mlc_llm.transform import rewrite_attention
 
 
 def _parse_args():
@@ -36,6 +38,7 @@ def _parse_args():
         choices=[*utils.quantization_dict.keys()],
         default=list(utils.quantization_dict.keys())[0],
     )
+    args.add_argument("--cutlass-offload", action="store_true", default=False)
     args.add_argument("--max-seq-len", type=int, default=-1)
     args.add_argument("--target", type=str, default="auto")
     args.add_argument(
@@ -185,6 +188,8 @@ def debug_dump_script(mod, name, args):
         return
     dump_path = os.path.join(args.artifact_path, "debug", name)
     with open(dump_path, "w", encoding="utf-8") as outfile:
+        # Remove runtime modules from external codegen so that the IR module can be printed.
+        mod = mod.without_attr("external_mods").without_attr("const_name_to_constant")
         outfile.write(mod.script(show_meta=True))
     print(f"Dump mod to {dump_path}")
 
@@ -240,11 +245,23 @@ def mod_transform_before_build(
             storage_nbit=args.quantization.storage_nbit,
             dtype=args.quantization.model_dtype,
         )(mod)
-    mod = mlc_llm.transform.FuseTransposeMatmul()(mod)  # pylint: disable=not-callable
-    mod = relax.pipeline.get_pipeline()(mod)  # pylint: disable=no-value-for-parameter
-    mod = mlc_llm.transform.FuseDecodeMatmulEwise(  # pylint: disable=not-callable
-        args.quantization.model_dtype, args.target_kind
-    )(mod)
+    if args.target_kind == "cuda" and args.cutlass_offload:
+        from tvm.relax.backend.contrib.cutlass import partition_for_cutlass
+
+        debug_dump_script(mod, "mod_before_cutlass.py", args)
+        mod = partition_for_cutlass(mod)
+        debug_dump_script(mod, "mod_after_cutlass_partition.py", args)
+        codegen_pass = relax.transform.RunCodegen(
+            {"cutlass": {"sm": 80, "find_first_valid": False}},
+            entry_functions=model_names,
+        )
+        mod = codegen_pass(mod)
+        debug_dump_script(mod, "mod_after_cutlass_codegen.py", args)
+
+    mod = mlc_llm.transform.FuseTransposeMatmul()(mod)
+
+    mod = relax.pipeline.get_pipeline()(mod)
+    mod = mlc_llm.transform.FuseDecodeMatmulEwise(args.dtype)(mod)
     mod = relax.transform.DeadCodeElimination(model_names)(mod)
     mod = relax.transform.LiftTransformParams()(mod)
     mod_transform, mod_deploy = utils.split_transform_deploy_mod(mod, model_names)
@@ -317,10 +334,10 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
     ex = relax.build(mod_deploy, args.target, system_lib=args.system_lib)
 
     output_filename = (
-        f"{args.model}-{args.quantization.name}-{target_kind}.{args.lib_format}"
+        f"{args.model}-{args.quantization.name}-{target_kind}_{args.dtype}.{args.lib_format}"
     )
 
-    debug_dump_shader(ex, f"{args.model}_{args.quantization.name}_{target_kind}", args)
+    debug_dump_shader(ex, f"{args.model}_{args.quantization.name}_{target_kind}_{args.dtype}", args)
     lib_path = os.path.join(args.artifact_path, output_filename)
     ex.export_library(lib_path, **args.export_kwargs)
     print(f"Finish exporting to {lib_path}")
