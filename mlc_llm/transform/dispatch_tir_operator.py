@@ -817,7 +817,6 @@ def softmax_1xn_fp16_before(var_rxplaceholder: T.handle, var_T_softmax_norm: T.h
 
 
 def softmax_1xn_sch_func(f_softmax, cast_to_fp16: bool = False):
-    raise Exception("Not implemented")
     sch = tvm.tir.Schedule(f_softmax)
     if cast_to_fp16:
         b_cast = sch.get_block("compute")
@@ -6638,14 +6637,6 @@ tir_dispatch_dict = {
     get_dict_key(fused_min_max_triu_te_broadcast_to): fused_min_max_triu_te_broadcast_to_sch_func(),
     get_dict_key(rms_norm_before): rms_norm_after,
     get_dict_key(rms_norm_fp16_before): rms_norm_fp16_after,
-    # get_dict_key(softmax_before): softmax_after,
-    # get_dict_key(softmax_mxn_before): softmax_mxn_after,
-    # get_dict_key(softmax_cast_mxn_before): softmax_cast_mxn_after,
-    # get_dict_key(softmax_fp16_before): softmax_fp16_after,
-    # get_dict_key(softmax_mxn_fp16_before): softmax_mxn_fp16_after,
-    # get_dict_key(softmax_1xn_before): softmax_1xn_sch_func(softmax_1xn_before),
-    # get_dict_key(softmax_cast_1xn_before): softmax_1xn_sch_func(softmax_cast_1xn_before, cast_to_fp16=True),
-    # get_dict_key(softmax_1xn_fp16_before): softmax_1xn_sch_func(softmax_1xn_fp16_before),
     get_dict_key(matmul1_before): matmul1_after,
     get_dict_key(matmul2_before): matmul2_sch_func(),
     get_dict_key(matmul5_before): matmul5_after,
@@ -6731,8 +6722,6 @@ def lookup_func(func):
 class DispatchTIROperator:
     def transform_module(self, mod: IRModule, ctx: tvm.transform.PassContext) -> IRModule:
         for gv in mod.functions:
-            if tvm.ir.structural_equal(mod[gv], softmax):
-                breakpoint()
             scheduled_func = lookup_func(mod[gv])
             if scheduled_func is not None:
                 mod[gv] = scheduled_func
