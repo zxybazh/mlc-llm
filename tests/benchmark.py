@@ -1,11 +1,18 @@
-import torch
-import argparse, os, time
-import tvm
-from mlc_llm.conversation import SeparatorStyle, conv_templates, compute_skip_echo_len
-from mlc_llm import utils
-from utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
+from typing import Optional
+
+import os
+import time
+import argparse
 import numpy as np
+
+import torch
+from llama_cpp import Llama
 from transformers import AutoModelForCausalLM
+
+import tvm
+from mlc_llm import utils
+from mlc_llm.conversation import SeparatorStyle, conv_templates, compute_skip_echo_len
+from .utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
 
 
 class Colors:
@@ -21,7 +28,7 @@ class Colors:
 
 
 # NOTE: "all" is currently not supported due to GPU OOM issue in creating multiple model wrappers.
-BENCHMARK_MODES = ["tvm", "torch-eager", "torch-inductor"]
+BENCHMARK_MODES = ["tvm", "torch-eager", "torch-inductor", "llama-cpp"]
 
 
 def _parse_args():
@@ -341,6 +348,84 @@ class TorchModelWrapper(ModelWrapper):
                 yield output
             if stopped:
                 break
+
+
+class LlamaCppTorchModelWrapper(ModelWrapper):
+    def __init__(
+        self,
+        model_path: str,
+        tokenizer,
+        max_gen_len,  # n_ctx text context
+        conv_template,
+        n_parts: int = -1,  # -1 for default
+        n_gpu_layers: int = 0,  # number of layers to store in VRAM
+        seed: int = 1337,  # RNG seed, 0 for random
+        f16_kv: bool = True,  # use fp16 for KV cache
+        logits_all: bool = False,  # the llama_eval() call computes all logits, not just the last one
+        vocab_only: bool = False,  # only load the vocabulary, no weights
+        use_mmap: bool = True,  # use mmap if possible
+        use_mlock: bool = False,  # force system to keep model in RAM
+        embedding: bool = False,  # embedding mode only
+        n_threads: Optional[int] = None,
+        n_batch: int = 512,
+        last_n_tokens_size: int = 64,
+        lora_base: Optional[str] = None,
+        lora_path: Optional[str] = None,
+        verbose: bool = True,
+    ):
+        super().__init__(tokenizer, max_gen_len, conv_template)
+
+        self.name = f"llama_cpp_model_wrapper"
+        self.model_path = model_path
+        self.model = Llama(
+            model_path,
+            n_ctx=max_gen_len,
+            n_parts=n_parts,
+            n_gpu_layers=n_gpu_layers,
+            seed=seed,
+            f16_kv=f16_kv,
+            logits_all=logits_all,
+            vocab_only=vocab_only,
+            use_mmap=use_mmap,
+            use_mlock=use_mlock,
+            embedding=embedding,
+            n_threads=n_threads,
+            n_batch=n_batch,
+            last_n_tokens_size=last_n_tokens_size,
+            lora_base=lora_base,
+            lora_path=lora_path,
+            verbose=verbose,
+        )
+        self.tokens = self.model.tokenize(
+            (" ".join(["test" for i in range(max_gen_len * 10)])).encode("utf-8")
+        )
+
+    def sync(self):
+        pass
+
+    def benchmark_core(self, num_input_tokens, num_output_tokens):
+        total_len = num_input_tokens + num_output_tokens
+        for cur_pos in range(num_input_tokens, total_len):
+            self.model.eval(self.tokens[:, :cur_pos])
+            token = self.model.sample()
+            self.tokens[:, cur_pos] = token
+
+    def generate(
+        self,
+        prompt: str = "Q: Name the planets in the solar system? A: ",
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+        stream_interval: int = 2,
+        stop_str: str = None,
+    ):
+        output = self.model(
+            prompt,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop_str,
+            stream_interval=stream_interval,
+        )
+        return iter(output)
 
 
 # Benchmark single-round conv
