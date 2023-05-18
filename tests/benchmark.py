@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 
 import os
 import time
@@ -6,13 +6,13 @@ import argparse
 import numpy as np
 
 import torch
-from llama_cpp import Llama
+from llama_cpp import Llama, llama_token
 from transformers import AutoModelForCausalLM
 
 import tvm
 from mlc_llm import utils
 from mlc_llm.conversation import SeparatorStyle, conv_templates, compute_skip_echo_len
-from .utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
+from utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
 
 
 class Colors:
@@ -36,6 +36,7 @@ def _parse_args():
     utils.argparse_add_common(args)
     args.add_argument("--device-name", type=str, default="auto")
     args.add_argument("--artifact-path", type=str, default="dist")
+    args.add_argument("--ggml-file-name", type=str, default="ggml-model-f16.bin")
     args.add_argument("--max-gen-len", type=int, default=2048)
     args.add_argument(
         "--benchmark-mode",
@@ -56,22 +57,26 @@ def _parse_args():
         parsed.model,
         parsed.dtype,
     )
+    parsed.ggml_file_path = os.path.join(parsed.model_path, parsed.ggml_file_name)
     utils.argparse_postproc_common(parsed)
     return parsed
 
 
 class ModelWrapper:
-    def __init__(self, tokenizer, max_gen_len, conv_template):
+    def __init__(self, tokenizer, max_gen_len: int, conv_template):
         self.name = None
         self.tokenizer = tokenizer
         self.max_gen_len = max_gen_len
         self.conv_template = conv_template
 
-    def sync(self):
-        assert 0, "Not intended to call directly"
+    def prep_model(self):
+        raise NotImplementedError
 
-    def benchmark_core(self, num_input_tokens, num_output_tokens):
-        assert 0, "Not intended to call directly"
+    def sync(self):
+        raise NotImplementedError
+
+    def benchmark_core(self, num_input_tokens: int, num_output_tokens: int):
+        raise NotImplementedError
 
     def generate(
         self,
@@ -81,7 +86,7 @@ class ModelWrapper:
         stream_interval: int = 2,
         stop_str: str = None,
     ):
-        assert 0, "Not intended to call directly"
+        raise NotImplementedError
 
 
 # TODO: Reset kv cache
@@ -350,13 +355,18 @@ class TorchModelWrapper(ModelWrapper):
                 break
 
 
-class LlamaCppTorchModelWrapper(ModelWrapper):
+class LlamaCppModelWrapper(ModelWrapper):
+    name: str = "llama_cpp_model_wrapper"  # name of the model wrapper
+    ggml_file_path: str  # path to the ggml model binary path
+    model: Llama  # llama model object
+    tokens: List[llama_token]  # llama tokens
+
     def __init__(
         self,
-        model_path: str,
         tokenizer,
         max_gen_len,  # n_ctx text context
         conv_template,
+        ggml_file_path: str,  # path to the ggml model binary path
         n_parts: int = -1,  # -1 for default
         n_gpu_layers: int = 0,  # number of layers to store in VRAM
         seed: int = 1337,  # RNG seed, 0 for random
@@ -376,9 +386,9 @@ class LlamaCppTorchModelWrapper(ModelWrapper):
         super().__init__(tokenizer, max_gen_len, conv_template)
 
         self.name = f"llama_cpp_model_wrapper"
-        self.model_path = model_path
+        self.ggml_file_path = ggml_file_path
         self.model = Llama(
-            model_path,
+            ggml_file_path,
             n_ctx=max_gen_len,
             n_parts=n_parts,
             n_gpu_layers=n_gpu_layers,
@@ -396,19 +406,24 @@ class LlamaCppTorchModelWrapper(ModelWrapper):
             lora_path=lora_path,
             verbose=verbose,
         )
-        self.tokens = self.model.tokenize(
-            (" ".join(["test" for i in range(max_gen_len * 10)])).encode("utf-8")
-        )
+        self.tokens = self.model.tokenize("test".encode("utf-8"))
+        for i in range(2, max_gen_len * 3):
+            # we buffer a token list to avoid the overhead of calling tokenize() for each token
+            # first token is the start token, after that it's all "test" token
+            self.tokens.append(self.tokens[1])
 
     def sync(self):
+        pass
+
+    def prep_model(self):
         pass
 
     def benchmark_core(self, num_input_tokens, num_output_tokens):
         total_len = num_input_tokens + num_output_tokens
         for cur_pos in range(num_input_tokens, total_len):
-            self.model.eval(self.tokens[:, :cur_pos])
+            self.model.eval(self.tokens[: cur_pos + 1])
             token = self.model.sample()
-            self.tokens[:, cur_pos] = token
+            self.tokens[cur_pos + 1] = token
 
     def generate(
         self,
@@ -535,6 +550,11 @@ def get_model_wrapper(mode, tokenizer, ARGS):
             torch_device="cuda",
             torch_mode=mode[6:],
         )
+    elif mode == "llama-cpp":
+        return LlamaCppModelWrapper(
+            tokenizer, ARGS.max_gen_len, ARGS.conv_template, ARGS.ggml_file_path
+        )
+    raise ValueError(f"Unknown mode {mode}")
 
 
 if __name__ == "__main__":
