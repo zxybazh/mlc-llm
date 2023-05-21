@@ -3,7 +3,6 @@ from tvm import relax
 from tvm import IRModule
 from tvm.script import tir as T
 
-from debug_utils import ExceptDebug
 
 
 @relax.expr_functor.visitor
@@ -14,7 +13,6 @@ class CallTIRArgCollector(relax.expr_functor.PyExprVisitor):
         self.to_allow_nonaligned = set()
         self._token_params = set()
 
-    @ExceptDebug
     def visit_function_(self, func):
         self._token_params = set(
             param for param in func.params if "input_ids" in param.name_hint
@@ -22,7 +20,6 @@ class CallTIRArgCollector(relax.expr_functor.PyExprVisitor):
         self.visit_expr(func.body)
         self._token_params = set()
 
-    @ExceptDebug
     def visit_var_binding_(self, binding):
         if not isinstance(binding.value, relax.Call):
             return
@@ -89,7 +86,6 @@ def update_primfunc(func: tvm.tir.PrimFunc, arg_i: int) -> tvm.tir.PrimFunc:
 
 @tvm.transform.module_pass(opt_level=0, name="AllowNonAlignedInputs")
 class AllowNonAlignedInputs:
-    @ExceptDebug
     def transform_module(
         self, mod: IRModule, ctx: tvm.transform.PassContext
     ) -> IRModule:
