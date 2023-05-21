@@ -367,7 +367,7 @@ class LlamaCppModelWrapper(ModelWrapper):
         max_gen_len,
         conv_template,
         ggml_file_path: str,  # path to the ggml model binary path
-        n_ctx: int = 512,  # n_ctx text context
+        n_ctx: int = 2048,  # n_ctx text context
         n_parts: int = -1,  # -1 for default
         n_gpu_layers: int = 32,  # number of layers to store in VRAM
         seed: int = 1337,  # RNG seed, 0 for random
@@ -514,13 +514,13 @@ def benchmark(
 ):
     # Warm-up
     for _ in range(num_warm_up):
-        # print("Warm-up round #", _ + 1, "...")
+        print("Warm-up round #", _ + 1, "...")
         benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
 
     # Actual measurement
     elapsed = []
     for _ in range(num_measurement):
-        # print("Measurement round #", _ + 1, "...")
+        print("Measurement round #", _ + 1, "...")
         elapsed.append(
             benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
         )
