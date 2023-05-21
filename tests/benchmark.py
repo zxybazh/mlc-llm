@@ -69,7 +69,7 @@ class ModelWrapper:
         self.max_gen_len = max_gen_len
         self.conv_template = conv_template
 
-    def prep_model(self):
+    def prep_model(self, *args, **kwargs):
         raise NotImplementedError
 
     def sync(self):
@@ -125,7 +125,7 @@ class TvmModelWrapper(ModelWrapper):
         if str(self.tvm_device) != "cpu":
             self.tvm_device.sync()
 
-    def prep_model(self):
+    def prep_model(self, *args, **kwarg):
         self.model = get_tvm_model(self.const_params, self.vm)
 
     def benchmark_core(self, num_input_tokens, num_output_tokens):
@@ -286,7 +286,7 @@ class TorchModelWrapper(ModelWrapper):
         self._model = model.to(torch_device)
         self.prep_model()
 
-    def prep_model(self):
+    def prep_model(self, *args, **kwarg):
         model = get_pytorch_model(self._model)
         self.model = torch.compile(model, backend=self.torch_mode, dynamic=True)
 
@@ -364,11 +364,12 @@ class LlamaCppModelWrapper(ModelWrapper):
     def __init__(
         self,
         tokenizer,
-        max_gen_len,  # n_ctx text context
+        max_gen_len,
         conv_template,
         ggml_file_path: str,  # path to the ggml model binary path
+        n_ctx: int = 512,  # n_ctx text context
         n_parts: int = -1,  # -1 for default
-        n_gpu_layers: int = 0,  # number of layers to store in VRAM
+        n_gpu_layers: int = 32,  # number of layers to store in VRAM
         seed: int = 1337,  # RNG seed, 0 for random
         f16_kv: bool = True,  # use fp16 for KV cache
         logits_all: bool = False,  # the llama_eval() call computes all logits, not just the last one
@@ -389,7 +390,7 @@ class LlamaCppModelWrapper(ModelWrapper):
         self.ggml_file_path = ggml_file_path
         self.model = Llama(
             ggml_file_path,
-            n_ctx=max_gen_len,
+            n_ctx=n_ctx,
             n_parts=n_parts,
             n_gpu_layers=n_gpu_layers,
             seed=seed,
@@ -406,24 +407,22 @@ class LlamaCppModelWrapper(ModelWrapper):
             lora_path=lora_path,
             verbose=verbose,
         )
-        self.tokens = self.model.tokenize("test".encode("utf-8"))
-        for i in range(2, max_gen_len * 3):
-            # we buffer a token list to avoid the overhead of calling tokenize() for each token
-            # first token is the start token, after that it's all "test" token
-            self.tokens.append(self.tokens[1])
 
     def sync(self):
         pass
 
-    def prep_model(self):
-        pass
+    def prep_model(self, num_input_tokens: int, num_output_tokens: int, *args, **kwarg):
+        self.model.reset()
+        self.tokens = self.model.tokenize(
+            (" ".join(["test" for _ in range(num_input_tokens)])).encode("utf-8")
+        )
 
-    def benchmark_core(self, num_input_tokens, num_output_tokens):
-        total_len = num_input_tokens + num_output_tokens
-        for cur_pos in range(num_input_tokens, total_len):
-            self.model.eval(self.tokens[: cur_pos + 1])
-            token = self.model.sample()
-            self.tokens[cur_pos + 1] = token
+    def benchmark_core(self, num_input_tokens: int, num_output_tokens: int):
+        tokens = self.model.generate(
+            self.tokens, top_k=40, top_p=0.95, temp=0.8, repeat_penalty=1.1
+        )
+        for _ in range(num_output_tokens):
+            next(tokens)
 
     def generate(
         self,
@@ -496,7 +495,7 @@ def benchmark_e2e_chat(model_wrapper, prompt, enable_print=False):
 
 def benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens):
     # Clear kv cache and prepare the model
-    model_wrapper.prep_model()
+    model_wrapper.prep_model(num_input_tokens, num_output_tokens)
     model_wrapper.sync()
     t0 = time.time()
     model_wrapper.benchmark_core(num_input_tokens, num_output_tokens)
@@ -515,11 +514,13 @@ def benchmark(
 ):
     # Warm-up
     for _ in range(num_warm_up):
+        # print("Warm-up round #", _ + 1, "...")
         benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
 
     # Actual measurement
     elapsed = []
     for _ in range(num_measurement):
+        # print("Measurement round #", _ + 1, "...")
         elapsed.append(
             benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
         )
