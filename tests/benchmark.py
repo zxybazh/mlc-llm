@@ -6,7 +6,6 @@ import argparse
 import numpy as np
 
 import torch
-from llama_cpp import Llama, llama_token
 from transformers import AutoModelForCausalLM
 
 import tvm
@@ -32,7 +31,20 @@ BENCHMARK_MODES = ["tvm", "torch-eager", "torch-inductor", "llama-cpp"]
 
 def _parse_args():
     args = argparse.ArgumentParser()
-    utils.argparse_add_common(args)
+    args.add_argument(
+        "--model",
+        type=str,
+        default="auto",
+        help='The name of the model to build. If it is "auto", we will automatically set the '
+        'model name according to "--model-path", "hf-path" or the model folders under '
+        '"--artifact-path/models"',
+    )
+    args.add_argument(
+        "--quantization",
+        type=str,
+        choices=[*utils.quantization_dict.keys()],
+        default=list(utils.quantization_dict.keys())[0],
+    )
     args.add_argument("--prompt", type=str, default="Repeat the following paragraph exactly: Carlos Alcaraz is a professional tennis player from Spain. He was born on April 12, 1997, and has been playing tennis since he was a child. Alcaraz is known for his aggressive playing style and his ability to come back from difficult situations. He has won several junior tournaments and has also played on the ATP Tour. Alcaraz He has a career high ranking in men’s singles by the Association of Tennis Professionals of world No. 1 achieved on 12 September 2022. He is currently ranked world No. 2 by the ATP. He is known for his strong serve and powerful groundstrokes. He is also known for his positive attitude and his determination to succeed on the court.")
     args.add_argument("--device-name", type=str, default="auto")
     args.add_argument("--artifact-path", type=str, default="dist")
@@ -51,15 +63,14 @@ def _parse_args():
     args.add_argument("--num-output-tokens", type=int, default=32)
 
     parsed = args.parse_args()
+    utils.argparse_postproc_common(parsed)
 
     parsed.model_path = os.path.join(parsed.artifact_path, "models", parsed.model)
     parsed.artifact_path = os.path.join(
         parsed.artifact_path,
-        parsed.model,
-        parsed.dtype,
+        f"{parsed.model}-{parsed.quantization.name}"
     )
     parsed.ggml_file_path = os.path.join(parsed.model_path, parsed.ggml_file_name)
-    utils.argparse_postproc_common(parsed)
     return parsed
 
 
@@ -107,6 +118,7 @@ class TvmModelWrapper(ModelWrapper):
         conv_template,
         artifact_path,
         model_name,
+        quant,
         dtype,
         tvm_device,
         torch_device=("cuda" if torch.cuda.is_available() else "cpu"),
@@ -118,7 +130,7 @@ class TvmModelWrapper(ModelWrapper):
         self.model_name = model_name
         self.dtype = dtype
         tvm_ex = tvm.runtime.load_module(
-            f"{artifact_path}/{model_name}_{tvm_device}_{dtype}.so"
+            f"{artifact_path}/{model_name}-{quant}-{tvm_device}.so"
         )
         self.tvm_device = tvm.device(tvm_device)
         self.torch_device = torch.device(torch_device)
@@ -372,6 +384,7 @@ class TorchModelWrapper(ModelWrapper):
                 break
 
 class LlamaCppModelWrapper(ModelWrapper):
+    from llama_cpp import Llama, llama_token
     name: str = "llama_cpp_model_wrapper"  # name of the model wrapper
     ggml_file_path: str  # path to the ggml model binary path
     model: Llama  # llama model object
@@ -531,13 +544,11 @@ def benchmark(
 ):
     # Warm-up
     for _ in range(num_warm_up):
-        print("Warm-up round #", _ + 1, "...")
-        benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
+        benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens, skip_sampling)
 
     # Actual measurement
     elapsed = []
     for _ in range(num_measurement):
-        print("Measurement round #", _ + 1, "...")
         elapsed.append(
             benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens, skip_sampling)
         )
@@ -554,7 +565,8 @@ def get_model_wrapper(mode, tokenizer, ARGS):
             ARGS.conv_template,
             ARGS.artifact_path,
             ARGS.model,
-            ARGS.dtype,
+            ARGS.quantization.name,
+            ARGS.quantization.model_dtype,
             tvm_device=ARGS.device_name,
             torch_device="cpu", # TODO: change to "cuda" when dlpack conversion works.
         )
@@ -564,7 +576,7 @@ def get_model_wrapper(mode, tokenizer, ARGS):
             ARGS.max_gen_len,
             ARGS.conv_template,
             ARGS.model_path,
-            ARGS.dtype,
+            ARGS.quantization.model_dtype,
             torch_device="cuda",
             torch_mode=mode[6:],
         )

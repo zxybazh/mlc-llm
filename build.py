@@ -249,7 +249,7 @@ def cuda_offload(mod, args):
 
     codegen_pass = relax.transform.RunCodegen(
         {"cutlass": {"sm": 80, "find_first_valid": False}},
-        entry_functions=["encoding", "decoding", "create_kv_cache"],
+        entry_functions=["prefill", "decode", "create_kv_cache", "softmax_with_temperature", "get_metadata"],
     )
     mod = codegen_pass(mod)
     debug_dump_script(mod, "mod_after_cuda_codegen.py", args)
@@ -283,9 +283,10 @@ def mod_transform_before_build(
         mod = cuda_offload(mod, args)
 
     mod = mlc_llm.transform.FuseTransposeMatmul()(mod)
-
+    debug_dump_script(mod, "mod_before_pipeline.py", args)
     mod = relax.pipeline.get_pipeline()(mod)
-    mod = mlc_llm.transform.FuseDecodeMatmulEwise(args.dtype)(mod)
+    mod = mlc_llm.transform.FuseDecodeMatmulEwise(args.quantization.model_dtype, args.target_kind)(mod)
+    debug_dump_script(mod, "mod_before_DCE.py", args)
     mod = relax.transform.DeadCodeElimination(model_names)(mod)
     mod = relax.transform.LiftTransformParams()(mod)
     mod_transform, mod_deploy = utils.split_transform_deploy_mod(mod, model_names)
@@ -360,10 +361,10 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
     ex = relax.build(mod_deploy, args.target, system_lib=args.system_lib)
 
     output_filename = (
-        f"{args.model}-{args.quantization.name}-{target_kind}_{args.dtype}.{args.lib_format}"
+        f"{args.model}-{args.quantization.name}-{target_kind}.{args.lib_format}"
     )
 
-    debug_dump_shader(ex, f"{args.model}_{args.quantization.name}_{target_kind}_{args.dtype}", args)
+    debug_dump_shader(ex, f"{args.model}_{args.quantization.name}_{target_kind}", args)
     lib_path = os.path.join(args.artifact_path, output_filename)
     ex.export_library(lib_path, **args.export_kwargs)
     print(f"Finish exporting to {lib_path}")
