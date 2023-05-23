@@ -1,11 +1,18 @@
-import torch
-import argparse, os, time
-import tvm
-from mlc_llm.conversation import SeparatorStyle, conv_templates, compute_skip_echo_len
-from mlc_llm import utils
-from utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
+from typing import Optional, List
+
+import os
+import time
+import argparse
 import numpy as np
+
+import torch
+from llama_cpp import Llama, llama_token
 from transformers import AutoModelForCausalLM
+
+import tvm
+from mlc_llm import utils
+from mlc_llm.conversation import SeparatorStyle, conv_templates, compute_skip_echo_len
+from utils import get_tokenizer, get_pytorch_model, get_tvm_model, sample_top_p
 
 class Colors:
     HEADER = "\033[95m"
@@ -20,7 +27,7 @@ class Colors:
 
 
 # NOTE: "all" is currently not supported due to GPU OOM issue in creating multiple model wrappers.
-BENCHMARK_MODES = ["tvm", "torch-eager", "torch-inductor"]
+BENCHMARK_MODES = ["tvm", "torch-eager", "torch-inductor", "llama-cpp"]
 
 
 def _parse_args():
@@ -29,6 +36,7 @@ def _parse_args():
     args.add_argument("--prompt", type=str, default="Repeat the following paragraph exactly: Carlos Alcaraz is a professional tennis player from Spain. He was born on April 12, 1997, and has been playing tennis since he was a child. Alcaraz is known for his aggressive playing style and his ability to come back from difficult situations. He has won several junior tournaments and has also played on the ATP Tour. Alcaraz He has a career high ranking in men’s singles by the Association of Tennis Professionals of world No. 1 achieved on 12 September 2022. He is currently ranked world No. 2 by the ATP. He is known for his strong serve and powerful groundstrokes. He is also known for his positive attitude and his determination to succeed on the court.")
     args.add_argument("--device-name", type=str, default="auto")
     args.add_argument("--artifact-path", type=str, default="dist")
+    args.add_argument("--ggml-file-name", type=str, default="ggml-model-f16.bin")
     args.add_argument("--max-gen-len", type=int, default=2048)
     args.add_argument(
         "--benchmark-mode",
@@ -50,12 +58,13 @@ def _parse_args():
         parsed.model,
         parsed.dtype,
     )
+    parsed.ggml_file_path = os.path.join(parsed.model_path, parsed.ggml_file_name)
     utils.argparse_postproc_common(parsed)
     return parsed
 
 
 class ModelWrapper:
-    def __init__(self, tokenizer, max_gen_len, conv_template):
+    def __init__(self, tokenizer, max_gen_len: int, conv_template):
         self.name = None
         self.tokenizer = tokenizer
         self.max_gen_len = max_gen_len
@@ -87,7 +96,7 @@ class ModelWrapper:
         stream_interval: int = 2,
         stop_str: str = None,
     ):
-        assert 0, "Not intended to call directly"
+        raise NotImplementedError
 
 
 class TvmModelWrapper(ModelWrapper):
@@ -125,7 +134,7 @@ class TvmModelWrapper(ModelWrapper):
         if str(self.tvm_device) != "cpu":
             self.tvm_device.sync()
 
-    def prep_model(self):
+    def prep_model(self, *args, **kwarg):
         self.model = get_tvm_model(self.const_params, self.vm)
 
     def benchmark_core(self, num_input_tokens, num_output_tokens, skip_sampling=False):
@@ -290,7 +299,7 @@ class TorchModelWrapper(ModelWrapper):
         self._model = model.to(torch_device)
         self.prep_model()
 
-    def prep_model(self):
+    def prep_model(self, *args, **kwarg):
         model = get_pytorch_model(self._model)
         self.model = torch.compile(model, backend=self.torch_mode, dynamic=True)
 
@@ -362,6 +371,92 @@ class TorchModelWrapper(ModelWrapper):
             if stopped:
                 break
 
+class LlamaCppModelWrapper(ModelWrapper):
+    name: str = "llama_cpp_model_wrapper"  # name of the model wrapper
+    ggml_file_path: str  # path to the ggml model binary path
+    model: Llama  # llama model object
+    tokens: List[llama_token]  # llama tokens
+
+    def __init__(
+        self,
+        tokenizer,
+        max_gen_len,
+        conv_template,
+        ggml_file_path: str,  # path to the ggml model binary path
+        n_ctx: int = 2048,  # n_ctx text context
+        n_parts: int = -1,  # -1 for default
+        n_gpu_layers: int = 32,  # number of layers to store in VRAM
+        seed: int = 1337,  # RNG seed, 0 for random
+        f16_kv: bool = True,  # use fp16 for KV cache
+        logits_all: bool = False,  # the llama_eval() call computes all logits, not just the last one
+        vocab_only: bool = False,  # only load the vocabulary, no weights
+        use_mmap: bool = True,  # use mmap if possible
+        use_mlock: bool = False,  # force system to keep model in RAM
+        embedding: bool = False,  # embedding mode only
+        n_threads: Optional[int] = None,
+        n_batch: int = 512,
+        last_n_tokens_size: int = 64,
+        lora_base: Optional[str] = None,
+        lora_path: Optional[str] = None,
+        verbose: bool = True,
+    ):
+        super().__init__(tokenizer, max_gen_len, conv_template)
+
+        self.name = f"llama_cpp_model_wrapper"
+        self.ggml_file_path = ggml_file_path
+        self.model = Llama(
+            ggml_file_path,
+            n_ctx=n_ctx,
+            n_parts=n_parts,
+            n_gpu_layers=n_gpu_layers,
+            seed=seed,
+            f16_kv=f16_kv,
+            logits_all=logits_all,
+            vocab_only=vocab_only,
+            use_mmap=use_mmap,
+            use_mlock=use_mlock,
+            embedding=embedding,
+            n_threads=n_threads,
+            n_batch=n_batch,
+            last_n_tokens_size=last_n_tokens_size,
+            lora_base=lora_base,
+            lora_path=lora_path,
+            verbose=verbose,
+        )
+
+    def sync(self):
+        pass
+
+    def prep_model(self, num_input_tokens: int, num_output_tokens: int, *args, **kwarg):
+        self.model.reset()
+        self.tokens = self.model.tokenize(
+            (" ".join(["test" for _ in range(num_input_tokens)])).encode("utf-8")
+        )
+
+    def benchmark_core(self, num_input_tokens: int, num_output_tokens: int):
+        tokens = self.model.generate(
+            self.tokens, top_k=40, top_p=0.95, temp=0.8, repeat_penalty=1.1
+        )
+        for _ in range(num_output_tokens):
+            next(tokens)
+
+    def generate(
+        self,
+        prompt: str = "Q: Name the planets in the solar system? A: ",
+        temperature: float = 0.8,
+        top_p: float = 0.95,
+        stream_interval: int = 2,
+        stop_str: str = None,
+    ):
+        output = self.model(
+            prompt,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop_str,
+            stream_interval=stream_interval,
+        )
+        return iter(output)
+
 # Benchmark single-round conv
 def benchmark_e2e_chat(model_wrapper, prompt, enable_print=False):
     conv = conv_templates[model_wrapper.conv_template].copy()
@@ -416,7 +511,7 @@ def benchmark_e2e_chat(model_wrapper, prompt, enable_print=False):
 
 def benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens, skip_sampling):
     # Clear kv cache and prepare the model
-    model_wrapper.prep_model()
+    model_wrapper.prep_model(num_input_tokens, num_output_tokens)
     model_wrapper.sync()
     t0 = time.time()
     model_wrapper.benchmark_core(num_input_tokens, num_output_tokens, skip_sampling)
@@ -436,11 +531,13 @@ def benchmark(
 ):
     # Warm-up
     for _ in range(num_warm_up):
-        benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens, skip_sampling)
+        print("Warm-up round #", _ + 1, "...")
+        benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens)
 
     # Actual measurement
     elapsed = []
     for _ in range(num_measurement):
+        print("Measurement round #", _ + 1, "...")
         elapsed.append(
             benchmark_core_chat(model_wrapper, num_input_tokens, num_output_tokens, skip_sampling)
         )
@@ -471,6 +568,11 @@ def get_model_wrapper(mode, tokenizer, ARGS):
             torch_device="cuda",
             torch_mode=mode[6:],
         )
+    elif mode == "llama-cpp":
+        return LlamaCppModelWrapper(
+            tokenizer, ARGS.max_gen_len, ARGS.conv_template, ARGS.ggml_file_path
+        )
+    raise ValueError(f"Unknown mode {mode}")
 
 
 if __name__ == "__main__":
