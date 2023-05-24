@@ -326,9 +326,12 @@ class TorchModelWrapper(ModelWrapper):
             .to(torch.int32)
             .to(self.torch_device)
         )
-
+        past_key_values = None
         for cur_pos in range(num_input_tokens, total_len):
-            logits = self.model(tokens[:, :cur_pos])
+            if cur_pos == num_input_tokens:
+                logits, past_key_values = self.model(inputs=tokens[:, :cur_pos], past_key_values=past_key_values)
+            else:
+                logits, past_key_values = self.model(inputs=tokens[:, cur_pos - 1 : cur_pos], past_key_values=past_key_values)
 
             if skip_sampling:
                 continue
@@ -356,9 +359,12 @@ class TorchModelWrapper(ModelWrapper):
         )
         tokens[0, :prompt_len] = torch.tensor(prompt_tokens).to(torch.int32)
         start_pos = prompt_len
-
+        past_key_values = None
         for cur_pos in range(start_pos, total_len):
-            logits = self.model(tokens[:, :cur_pos])
+            if cur_pos == start_pos:
+                logits, past_key_values = self.model(inputs=tokens[:, :cur_pos], past_key_values=past_key_values)
+            else:
+                logits, past_key_values = self.model(inputs=tokens[:, cur_pos - 1 : cur_pos], past_key_values=past_key_values)
             logits = logits[:, -1, :]
             if temperature > 0:
                 probs = torch.softmax((logits / temperature).to(torch.float32), dim=-1)

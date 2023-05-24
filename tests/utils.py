@@ -1,7 +1,7 @@
 import torch
 import tvm
 from transformers import AutoTokenizer
-
+from typing import Optional, List
 
 def sample_top_p(probs, p):
     probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
@@ -39,10 +39,11 @@ def get_tvm_model(const_params, vm):
 
 
 def get_pytorch_model(model, use_cache=True):
-    def forward(inputs: torch.Tensor) -> torch.Tensor:
+    def forward(inputs: torch.Tensor, past_key_values=None) -> (torch.Tensor, Optional[List[torch.FloatTensor]]):
         # NOTE: torch.inference_mode() is not supported with torch inductor yet.
         with torch.no_grad(): 
-            return model(inputs, use_cache=use_cache).logits
+            out = model(inputs, use_cache=use_cache, past_key_values=past_key_values)
+            return out.logits, out.past_key_values
 
     return forward
 
