@@ -288,23 +288,6 @@ def mod_transform_before_build(
         ]
 
     if args.quantization.mode != "no":
-<<<<<<< HEAD
-        mod = mlc_llm.transform.GroupQuantize(  # pylint: disable=not-callable
-            group_size=40 if args.quantization.mode.endswith("3") else 32,
-            sym=args.quantization.sym,
-            mode=args.quantization.mode,
-            storage_nbit=args.quantization.storage_nbit,
-            dtype=args.quantization.model_dtype,
-        )(mod)
-    if args.target_kind == "cuda":
-        mod = cuda_offload(mod, args)
-
-    mod = mlc_llm.transform.FuseTransposeMatmul()(mod)
-    debug_dump_script(mod, "mod_before_pipeline.py", args)
-    mod = relax.pipeline.get_pipeline()(mod)
-    mod = mlc_llm.transform.FuseDecodeMatmulEwise(args.quantization.model_dtype, args.target_kind)(mod)
-    debug_dump_script(mod, "mod_before_DCE.py", args)
-=======
         if ARGS.model.startswith("rwkv-"):
             mod = mlc_llm.transform.RWKVQuantize(  # pylint: disable=not-callable
                 mode=args.quantization.mode,
@@ -318,12 +301,14 @@ def mod_transform_before_build(
                 storage_nbit=args.quantization.storage_nbit,
                 dtype=args.quantization.model_dtype,
             )(mod)
+    
+    if args.target_kind == "cuda":
+        mod = cuda_offload(mod, args)
     mod = mlc_llm.transform.FuseTransposeMatmul()(mod)  # pylint: disable=not-callable
     mod = relax.pipeline.get_pipeline()(mod)  # pylint: disable=no-value-for-parameter
     mod = mlc_llm.transform.FuseDecodeMatmulEwise(  # pylint: disable=not-callable
         args.quantization.model_dtype, args.target_kind
     )(mod)
->>>>>>> upstream/main
     mod = relax.transform.DeadCodeElimination(model_names)(mod)
     mod = relax.transform.LiftTransformParams()(mod)
     mod_transform, mod_deploy = utils.split_transform_deploy_mod(mod, model_names)
@@ -331,14 +316,9 @@ def mod_transform_before_build(
     debug_dump_script(mod_transform, "mod_lift_params.py", args)
     debug_dump_script(mod_deploy, "mod_deploy.py", args)
 
-<<<<<<< HEAD
-    new_params = utils.transform_params(mod_transform, model_params)
+    new_params = utils.transform_params(mod_transform, model_params, args)
     if not args.skip_param_dump:
         utils.save_params(new_params, args.artifact_path)
-=======
-    new_params = utils.transform_params(mod_transform, model_params, args)
-    utils.save_params(new_params, args.artifact_path)
->>>>>>> upstream/main
     return mod_deploy
 
 
