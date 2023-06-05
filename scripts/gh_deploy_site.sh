@@ -1,7 +1,10 @@
 #!/bin/bash
+# NOTE: this script is triggered by github action automatically
+# when megred into main
+
 set -euxo pipefail
 
-cd site && jekyll b && cd ..
+scripts/build_site.sh
 
 git fetch
 git checkout -B gh-pages origin/gh-pages

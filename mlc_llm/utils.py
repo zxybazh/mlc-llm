@@ -1,14 +1,16 @@
 # pylint: disable=missing-docstring,invalid-name
 import argparse
+import json
 import os
 import shutil
 from dataclasses import dataclass
-from platform import system
-from typing import List, Tuple
+from typing import Any, Callable, Dict, List, Set, Optional, Tuple
 
 import tvm
 from tvm import meta_schedule as ms
 from tvm import relax
+
+from .transform import ReorderTransformFunc
 
 
 @dataclass
@@ -41,9 +43,12 @@ quantization_dict = {
     "q0f16": Quantization(
         name="q0f16", mode="no", sym=False, storage_nbit=-1, model_dtype="float16"
     ),
+    "q8f16_0": Quantization(
+        name="q8f16_0", mode="uint8", sym=False, storage_nbit=-1, model_dtype="float16"
+    ),
 }
 
-supported_model_types = set(["llama", "gpt_neox", "moss"])
+supported_model_types = set(["llama", "gpt_neox", "moss", "rwkv"])
 
 
 def argparse_postproc_common(args: argparse.Namespace) -> None:
@@ -53,6 +58,10 @@ def argparse_postproc_common(args: argparse.Namespace) -> None:
                 args.device_name = "cuda"
             elif tvm.metal().exist:
                 args.device_name = "metal"
+            elif tvm.vulkan().exist:
+                args.device_name = "vulkan"
+            elif tvm.opencl().exist:
+                args.device_name = "opencl"
             else:
                 raise ValueError("Cannot auto deduce device-name, please set it")
     supported_model_prefix = {
@@ -61,6 +70,8 @@ def argparse_postproc_common(args: argparse.Namespace) -> None:
         "stablelm-": ("stablelm", "gpt_neox"),
         "redpajama-": ("redpajama_chat", "gpt_neox"),
         "moss-": ("moss", "moss"),
+        "open-llama-": ("LM", "llama"),
+        "rwkv-": ("rwkv", "rwkv"),
     }
     model = args.model.lower()
     for prefix, (conv_template, model_category) in supported_model_prefix.items():
@@ -115,10 +126,58 @@ def split_transform_deploy_mod(
     return mod_transform, mod_deploy
 
 
+def load_torch_pname2binname_map(
+    model_path: str,
+    pnames: Set[str],
+    f_convert_pname_fwd: Callable[[str], str] = lambda pname: pname,
+) -> Dict[str, str]:
+    bin_idx_path = os.path.join(model_path, "pytorch_model.bin.index.json")
+    if os.path.isfile(bin_idx_path):
+        # Multiple weight shards.
+        with open(bin_idx_path, "r") as f_torch_json:
+            torch_bin_json = json.load(f_torch_json)
+            pname2binname = torch_bin_json["weight_map"]
+    else:
+        # Single weight shard.
+        single_shard_path = os.path.join(model_path, "pytorch_model.bin")
+        assert os.path.isfile(single_shard_path)
+        pname2binname = {
+            f_convert_pname_fwd(pname): "pytorch_model.bin" for pname in pnames
+        }
+
+    for pname in pnames:
+        assert f_convert_pname_fwd(pname) in pname2binname
+    return pname2binname
+
+
 def transform_params(
     mod_transform: tvm.IRModule,
-    model_params: List[tvm.nd.NDArray],
+    model_params: List[Optional[tvm.nd.NDArray]],
+    args: argparse.Namespace,
 ) -> List[tvm.nd.NDArray]:
+    # The directory that contains the raw model weights.
+    model_path: str = args.model_path
+    # The weight name conversion function.
+    # It converts relax model weight names to torch model weight names.
+    f_convert_pname_fwd: Callable[[str], str] = args.f_convert_pname_fwd
+    # The weight conversion function.
+    # It converts torch weight names and weight tensors to relax weight names and weights.
+    # The first "Any" stands for torch.Tensor, and the second stands for numpy.ndarray.
+    f_convert_param_bkwd: Callable[
+        [str, Any], List[Tuple[str, Any]]
+    ] = args.f_convert_param_bkwd
+    # Weight index to torch weight name
+    pidx2pname: Dict[int, str] = args.pidx2pname
+    # Torch weight name to the name of the binary file the weight resides in.
+    pname2binname: Dict[str, str] = args.pname2binname
+    # Torch weight name to weight index.
+    pname2pidx: Dict[str, int] = {pname: pidx for pidx, pname in pidx2pname.items()}
+    # The weight indices such that the weights are already loaded from binary file to memory.
+    loaded_idx_set: Set[int] = set()
+
+    mod_transform = ReorderTransformFunc(
+        pidx2pname, pname2binname, f_convert_pname_fwd
+    )(mod_transform)
     # Remove the dataflow block inside the param transform function,
     # so that the LazyTransformParams pass can be applied.
     mod_transform = relax.transform.ToNonDataflow()(mod_transform)
@@ -130,19 +189,62 @@ def transform_params(
             transform_func_name = gv.name_hint
     assert transform_func_name is not None
 
-    if tvm.cuda().exist:
-        target = "cuda"
-    elif tvm.metal().exist:
-        target = "metal"
-    else:
-        target = "llvm"
-    target = tvm.target.Target(target)
+    target = detect_local_target()
+    print(f"Automatically using target for weight quantization: {target}")
     device = tvm.device(target.kind.default_keys[0])
+    device_cpu = tvm.cpu()
+    loaded_params_dict: Dict[int, tvm.nd.NDArray] = {}
 
     @tvm.register_func("get_item", override=True)
     def get_item(i):
-        gpu_input = tvm.nd.array(model_params[i], device=device)
-        return gpu_input
+        # If the weight is already provided by `model_params`, directly use it
+        # and no need to load from binary file.
+        if model_params[i] is not None:
+            assert i not in pidx2pname
+            assert i not in loaded_params_dict
+            return tvm.nd.array(model_params[i], device=device)
+
+        assert f_convert_pname_fwd is not None
+        assert f_convert_param_bkwd is not None
+        # Otherwise, we load the weight from its corresponding binary file.
+        if i not in loaded_params_dict:
+            import torch  # pylint: disable=import-outside-toplevel
+
+            assert i in pidx2pname
+            pname = pidx2pname[i]
+            torch_pname = f_convert_pname_fwd(pname)
+            assert torch_pname in pname2binname
+            torch_params = torch.load(
+                os.path.join(model_path, pname2binname[torch_pname])
+            )
+
+            torch_param_names = list(torch_params.keys())
+            for torch_param_name in torch_param_names:
+                if str(torch_params[torch_param_name].dtype) == "torch.bfloat16":
+                    # Convert to float32 first.
+                    raw_param = (
+                        torch_params[torch_param_name].detach().cpu().float().numpy()
+                    )
+                else:
+                    raw_param = torch_params[torch_param_name].detach().cpu().numpy()
+                del torch_params[torch_param_name]
+
+                for param_name, param in f_convert_param_bkwd(
+                    torch_param_name, raw_param
+                ):
+                    if param_name in pname2pidx.keys():
+                        assert pname2pidx[param_name] not in loaded_params_dict
+                        loaded_params_dict[pname2pidx[param_name]] = tvm.nd.array(
+                            param, device_cpu
+                        )
+                del raw_param
+
+        assert i in loaded_params_dict
+        assert i not in loaded_idx_set
+        param_on_device = tvm.nd.array(loaded_params_dict[i], device=device)
+        loaded_idx_set.add(i)
+        del loaded_params_dict[i]
+        return param_on_device
 
     res = []
 
@@ -150,8 +252,7 @@ def transform_params(
     def set_item(i, value):
         if len(res) <= i:
             res.extend([None for _ in range(i - len(res) + 1)])
-        res[i] = tvm.nd.array(value, device=tvm.cpu())
-        return tvm.nd.empty((1,), device=device)
+        res[i] = tvm.nd.array(value, device=device_cpu)
 
     if target.kind.name != "llvm":
         with tvm.target.Target(target):
@@ -159,7 +260,9 @@ def transform_params(
 
     ex = relax.build(mod_transform, target=target)
     vm = relax.vm.VirtualMachine(ex, device)
+    print("Start computing and quantizing weights... This may take a while.")
     vm[transform_func_name]()
+    print("Finish computing and quantizing weights.")
     return res
 
 
@@ -233,6 +336,7 @@ def copy_tokenizer(args: argparse.Namespace) -> None:
             "vocab.json",
             "merges.txt",
             "added_tokens.json",
+            "tokenizer_config.json",
         ]:
             shutil.copy(
                 os.path.join(args.model_path, filename),
@@ -261,104 +365,113 @@ def get_database(db_paths: str) -> ms.Database:
     return db
 
 
+def _detect_local_metal():
+    dev = tvm.metal()
+    if not dev.exist:
+        return None
+    return tvm.target.Target(
+        {
+            "kind": "metal",
+            "max_shared_memory_per_block": 32768,
+            "max_threads_per_block": dev.max_threads_per_block,
+            "thread_warp_size": 32,
+        },
+        host=tvm.target.Target(  # TODO: assuming ARM mac for now
+            {
+                "kind": "llvm",
+                "mtriple": "arm64-apple-macos",
+                "mcpu": "apple-latest",
+            }
+        ),
+    )
+
+
+def _detect_local_cuda():
+    dev = tvm.cuda()
+    if not dev.exist:
+        return None
+    return tvm.target.Target(
+        {
+            "kind": "cuda",
+            "max_shared_memory_per_block": dev.max_shared_memory_per_block,
+            "max_threads_per_block": dev.max_threads_per_block,
+            "thread_warp_size": dev.warp_size,
+            "registers_per_block": 65536,
+            "arch": "sm_" + tvm.cuda().compute_version.replace(".", ""),
+        }
+    )
+
+
+def _detect_local_vulkan():
+    dev = tvm.vulkan()
+    if not dev.exist:
+        return None
+    return tvm.target.Target(
+        {
+            "kind": "vulkan",
+            "max_threads_per_block": dev.max_threads_per_block,
+            "max_shared_memory_per_block": dev.max_shared_memory_per_block,
+            "thread_warp_size": dev.warp_size,
+            "supports_float16": 1,
+            "supports_int16": 1,
+            "supports_int8": 1,
+            "supports_16bit_buffer": 1,
+        }
+    )
+
+
+def detect_local_target():
+    dev = tvm.metal()
+    if dev.exist:
+        return tvm.target.Target("apple/m1-gpu")
+
+    for method in [
+        _detect_local_metal,
+        _detect_local_cuda,
+        _detect_local_vulkan,
+    ]:
+        target = method()
+        if target is not None:
+            return target
+
+    print("Failed to detect local GPU, falling back to CPU as a target")
+    return tvm.target.Target("llvm")
+
+
 def parse_target(args: argparse.Namespace) -> None:
     if not hasattr(args, "target"):
         return
     if args.target == "auto":
-        if system() == "Darwin":
-            target = tvm.target.Target("apple/m1-gpu")
-        else:
-            has_gpu = tvm.cuda().exist
+        target = detect_local_target()
+        if target.host is None:
             target = tvm.target.Target(
-                "cuda"  # TODO: cuda details are required, for example, max shared memory
-                if has_gpu
-                else "llvm"
+                target,
+                host="llvm",  # TODO: detect host CPU
             )
-        print(f"Automatically configuring target: {target}")
-        args.target = tvm.target.Target(target, host="llvm")
+        args.target = target
         args.target_kind = args.target.kind.default_keys[0]
-    elif args.target == "webgpu":
-        args.target = tvm.target.Target(
-            "webgpu", host="llvm -mtriple=wasm32-unknown-unknown-wasm"
-        )
-        args.target_kind = "webgpu"
-        args.lib_format = "wasm"
-        args.system_lib = True
-    elif args.target.startswith("iphone"):
-        from tvm.contrib import tar, xcode  # pylint: disable=import-outside-toplevel
-
-        # override
-        @tvm.register_func("tvm_callback_metal_compile")
-        def compile_metal(src):
-            return xcode.compile_metal(src, sdk="iphoneos")
-
-        dylib = args.target == "iphone-dylib"
-
-        args.target = tvm.target.Target(
-            tvm.target.Target(
-                {
-                    "kind": "metal",
-                    "max_threads_per_block": 256,
-                    "max_shared_memory_per_block": 32768,
-                    "thread_warp_size": 1,
-                }
-            ),
-            host="llvm -mtriple=arm64-apple-darwin",
-        )
-        args.target_kind = "iphone"
-        args.export_kwargs = {"fcompile": tar.tar}
-
-        if dylib:
-            args.export_kwargs = {
-                "fcompile": xcode.create_dylib,
-                "sdk": "iphoneos",
-                "arch": "arm64",
-            }
-            args.lib_format = "dylib"
-        else:
-            args.lib_format = "tar"
-            args.system_lib = True
-            system_lib_prefix = f"{args.model}-{args.quantization}_"
-            args.system_lib_prefix = system_lib_prefix.replace("-", "_")
-
-    elif args.target.startswith("android"):
-        # android-opencl
-        from tvm.contrib import cc, ndk
-
-        dylib = args.target == "android-dylib"
-
-        args.target = tvm.target.Target(
-            "opencl",
-            host="llvm -mtriple=aarch64-linux-android",  # Only support arm64 for now
-        )
-        args.target_kind = "android"
-        if dylib:
-            args.export_kwargs = {
-                "fcompile": ndk.create_shared,
-            }
-            args.lib_format = "so"
-        else:
-            args.export_kwargs = {
-                "fcompile": ndk.create_staticlib,
-            }
-            args.lib_format = "a"
-            args.system_lib = True
-
-    elif args.target == "vulkan":
-        args.target = tvm.target.Target(
-            tvm.target.Target(
-                {
-                    "kind": "vulkan",
-                    "max_threads_per_block": 256,
-                    "max_shared_memory_per_block": 32768,
-                    "thread_warp_size": 1,
-                    "supports_float16": 1,
-                    "supports_int16": 1,
-                    "supports_16bit_buffer": 1,
-                }
-            ),
-            host="llvm",
-        )
+    elif args.target == "metal":
+        target = _detect_local_metal()
+        if target is None:
+            print("Cannot detect local Apple Metal GPU target! Falling back...")
+            target = tvm.target.Target(
+                tvm.target.Target(
+                    {
+                        "kind": "metal",
+                        "max_threads_per_block": 256,
+                        "max_shared_memory_per_block": 32768,
+                        "thread_warp_size": 1,
+                    }
+                ),
+                host=tvm.target.Target(  # TODO: assuming ARM mac for now
+                    {
+                        "kind": "llvm",
+                        "mtriple": "arm64-apple-macos",
+                        "mcpu": "apple-latest",
+                    }
+                ),
+            )
+        args.target = target
         args.target_kind = args.target.kind.default_keys[0]
     elif args.target == "metal_x86_64":
         from tvm.contrib import xcode  # pylint: disable=import-outside-toplevel
@@ -381,6 +494,94 @@ def parse_target(args: argparse.Namespace) -> None:
             "arch": "x86_64",
         }
         args.lib_format = "dylib"
+    elif args.target in ["iphone", "iphone-dylib", "iphone-tar"]:
+        from tvm.contrib import tar, xcode  # pylint: disable=import-outside-toplevel
+
+        if args.target == "iphone-dylib":
+            args.export_kwargs = {
+                "fcompile": xcode.create_dylib,
+                "sdk": "iphoneos",
+                "arch": "arm64",
+            }
+            args.lib_format = "dylib"
+        else:
+            args.export_kwargs = {"fcompile": tar.tar}
+            args.lib_format = "tar"
+            args.system_lib = True
+            args.system_lib_prefix = f"{args.model}_{args.quantization}_".replace(
+                "-", "_"
+            )
+
+        @tvm.register_func("tvm_callback_metal_compile")
+        def compile_metal(src, target):
+            if target.libs:
+                return xcode.compile_metal(src, sdk=target.libs[0])
+            return xcode.compile_metal(src)
+
+        target = tvm.target.Target(
+            tvm.target.Target(
+                {
+                    "kind": "metal",
+                    "max_threads_per_block": 256,
+                    "max_shared_memory_per_block": 32768,
+                    "thread_warp_size": 1,
+                    "libs": ["iphoneos"],
+                }
+            ),
+            host="llvm -mtriple=arm64-apple-darwin",
+        )
+        args.target = target
+        args.target_kind = "iphone"
+    elif args.target == "vulkan":
+        target = tvm.target.Target(
+            tvm.target.Target(
+                {
+                    "kind": "vulkan",
+                    "max_threads_per_block": 256,
+                    "max_shared_memory_per_block": 32768,
+                    "thread_warp_size": 1,
+                    "supports_float16": 1,
+                    "supports_int16": 1,
+                    "supports_int8": 1,
+                    "supports_8bit_buffer": 1,
+                    "supports_16bit_buffer": 1,
+                    "supports_storage_buffer_storage_class": 1,
+                }
+            ),
+            host="llvm",
+        )
+        args.target = target
+        args.target_kind = args.target.kind.default_keys[0]
+    elif args.target == "webgpu":
+        args.target = tvm.target.Target(
+            "webgpu",
+            host="llvm -mtriple=wasm32-unknown-unknown-wasm",
+        )
+        args.target_kind = "webgpu"
+        args.lib_format = "wasm"
+        args.system_lib = True
+    elif args.target in ["android", "android-dylib"]:  # android-opencl
+        from tvm.contrib import tar, ndk
+
+        if args.target == "android-dylib":
+            args.export_kwargs = {
+                "fcompile": ndk.create_shared,
+            }
+            args.lib_format = "so"
+        else:
+            args.export_kwargs = {
+                "fcompile": tar.tar,
+            }
+            args.lib_format = "tar"
+            args.system_lib = True
+            args.system_lib_prefix = f"{args.model}_{args.quantization}_".replace(
+                "-", "_"
+            )
+        args.target = tvm.target.Target(
+            "opencl",
+            host="llvm -mtriple=aarch64-linux-android",  # TODO: Only support arm64 for now
+        )
+        args.target_kind = "android"
     else:
         args.target = tvm.target.Target(args.target, host="llvm")
         args.target_kind = args.target.kind.default_keys[0]
@@ -399,3 +600,5 @@ def parse_target(args: argparse.Namespace) -> None:
         }
         args.target = args.target.with_host("llvm -mtriple=x86_64-w64-windows-gnu")
         args.lib_format = "dll"
+
+    print(f"Target configured: {args.target}")

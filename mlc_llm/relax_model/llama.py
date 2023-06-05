@@ -1,6 +1,6 @@
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import tvm
@@ -8,7 +8,9 @@ from tvm import relax, te
 from tvm.relax.testing import nn
 from tvm.script import relax as R
 
+from ..utils import load_torch_pname2binname_map
 from .commons import create_metadata_func
+from .modules import ModuleList, named_parameters
 
 
 @dataclass
@@ -417,9 +419,9 @@ class LlamaModel(nn.Module):
         self.embed_tokens = Embedding(
             config.vocab_size, config.hidden_size, dtype=config.dtype
         )
-        self.layers = [
-            LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)
-        ]
+        self.layers = ModuleList(
+            [LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)]
+        )
         self.norm = LlamaRMSNorm(
             config.hidden_size, dtype=config.dtype, eps=config.rms_norm_eps
         )
@@ -532,10 +534,11 @@ class LlamaForCausalLM(nn.Module):
         return logits, key_value_cache
 
 
-def create_encoding_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
+def create_encoding_func(bb: relax.BlockBuilder, config: LlamaConfig) -> Dict[int, str]:
     bsz = 1
     seq_len = tvm.tir.Var("n", "int64")
     all_seq_len = tvm.tir.Var("m", "int64")
+    pidx2pname: Dict[int, str] = {}
     with bb.function("prefill"):
         model = LlamaForCausalLM(config)
         input_ids = nn.Placeholder((bsz, seq_len), dtype="int32", name="input_ids")
@@ -557,12 +560,21 @@ def create_encoding_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
                 all_seq_len_shape,
                 past_key_values,
             ] + model.parameters()
+
+            named_params = named_parameters(model)
+            for i, (name, param) in enumerate(list(named_params.items())[:-2]):
+                pidx2pname[i] = name
+                assert param.same_as(params[i + 3])
+                assert not name.startswith("sin") and not name.startswith("cos")
+
             gv = bb.emit_output((logits, relax.Tuple(key_value_cache)))
         bb.emit_func_output(gv, params)
 
     mod = bb.get()
     gv = mod.get_global_var("prefill")
     bb.update_func(gv, mod[gv].with_attr("num_input", 3))
+
+    return pidx2pname
 
 
 def create_decoding_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
@@ -639,20 +651,22 @@ def create_softmax_func(bb: relax.BlockBuilder, config: LlamaConfig) -> None:
 
 
 def get_model(args, hf_config):
-    from transformers import AutoModelForCausalLM  # type: ignore[import]
-
     model_name = args.model
     model_path = args.model_path
     dtype = args.quantization.model_dtype
     max_seq_len = args.max_seq_len
 
-    if model_name.startswith("vicuna-") or model_name.startswith("llama-"):
+    if (
+        model_name.startswith("vicuna-")
+        or model_name.startswith("llama-")
+        or model_name.startswith("open-llama-")
+    ):
         config = LlamaConfig(**hf_config, dtype=dtype)
         if max_seq_len != -1:
             config.max_sequence_length = max_seq_len
 
         bb = relax.BlockBuilder()
-        create_encoding_func(bb, config)
+        pidx2pname = create_encoding_func(bb, config)
         create_decoding_func(bb, config)
         create_kv_cache_func(bb, config)
         create_softmax_func(bb, config)
@@ -665,17 +679,25 @@ def get_model(args, hf_config):
         )
 
         mod = bb.get()
+        for gv in mod.functions:
+            func = mod[gv]
+            if isinstance(func, relax.Function):
+                mod[gv] = func.with_attr(
+                    "tir_var_upper_bound",
+                    {
+                        "n": config.max_sequence_length,
+                        "m": config.max_sequence_length,
+                    },
+                )
+
+        pname2binname = load_torch_pname2binname_map(
+            model_path, set(pidx2pname.values())
+        )
 
         device = tvm.cpu()
-        hf_model = AutoModelForCausalLM.from_pretrained(model_path)
-        # Get a list of parameters in advance, then delete the model to save memory
-        param_list = [param for _, param in hf_model.named_parameters()]
-        del hf_model
 
-        for i, param in enumerate(param_list):
-            param_list[i] = tvm.nd.array(
-                param.detach().cpu().numpy().astype(config.dtype), device
-            )
+        param_list = [None] * len(pidx2pname)
+        assert len(param_list) == len(pidx2pname)
 
         head_dim = config.hidden_size / config.num_attention_heads
         inv_freq = 1.0 / (
@@ -691,16 +713,13 @@ def get_model(args, hf_config):
         param_list.append(tvm.nd.array(np.cos(emb).astype(config.dtype), device))
         param_list.append(tvm.nd.array(np.sin(emb).astype(config.dtype), device))
 
-        for gv in mod.functions:
-            func = mod[gv]
-            if isinstance(func, relax.Function):
-                mod[gv] = func.with_attr(
-                    "tir_var_upper_bound",
-                    {
-                        "n": config.max_sequence_length,
-                        "m": config.max_sequence_length,
-                    },
-                )
+        args.pidx2pname = pidx2pname
+        args.pname2binname = pname2binname
+        args.f_convert_pname_fwd = lambda pname: pname
+        args.f_convert_param_bkwd = lambda torch_pname, raw_param: [
+            (torch_pname, raw_param.astype(dtype))
+        ]
+
         return mod, param_list
 
     raise ValueError(f"Unsupported model: {model_name}")

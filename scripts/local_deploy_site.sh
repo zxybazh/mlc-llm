@@ -1,4 +1,8 @@
 #!/bin/bash
+# NOTE: use this script to check local site
+
 set -euxo pipefail
 
-cd site && jekyll serve --host localhost --baseurl /mlc-llm --port 8888
+scripts/build_site.sh
+
+cd site && jekyll serve  --skip-initial-build --host localhost --baseurl /mlc-llm --port 8888

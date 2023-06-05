@@ -3,7 +3,7 @@ import argparse
 import json
 import os
 import pickle
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import tvm
 from tvm import meta_schedule as ms
@@ -11,9 +11,8 @@ from tvm import relax
 
 import mlc_llm
 from mlc_llm import utils
-from mlc_llm.relax_model import gpt_neox, llama, moss
+from mlc_llm.relax_model import gpt_neox, llama, moss,  rwkv
 from mlc_llm.transform import rewrite_attention
-
 
 def _parse_args():
     args = argparse.ArgumentParser()
@@ -117,6 +116,14 @@ def _parse_args():
     parsed.artifact_path = os.path.join(
         parsed.artifact_path, f"{parsed.model}-{parsed.quantization.name}"
     )
+
+    # These dictionaries and functions are used for model weight loading.
+    #  - "p" here stands for "parameter".
+    #  - The first "Any" here stands for torch.Tensor, and the second stands for numpy.ndarray.
+    parsed.pidx2pname: Dict[int, str] = dict()
+    parsed.pname2binname: Dict[str, str] = dict()
+    parsed.f_convert_pname_fwd: Callable[[str], str] = None
+    parsed.f_convert_param_bkwd: Callable[[str, Any], List[Tuple[str, Any]]] = None
 
     return parsed
 
@@ -259,19 +266,29 @@ def cuda_offload(mod, args):
 
 def mod_transform_before_build(
     mod: tvm.IRModule,
-    model_params: List[tvm.nd.NDArray],
+    model_params: List[Optional[tvm.nd.NDArray]],
     args: argparse.Namespace,
 ) -> tvm.IRModule:
     """First-stage: Legalize ops and trace"""
-    model_names = [
-        "prefill",
-        "decode",
-        "create_kv_cache",
-        "softmax_with_temperature",
-        "get_metadata",
-    ]
+    if ARGS.model.startswith("rwkv-"):
+        model_names = [
+            "decode",
+            "create_kv_cache",
+            "softmax_with_temperature",
+            "get_metadata",
+            "reset_kv_cache",
+        ]
+    else:
+        model_names = [
+            "prefill",
+            "decode",
+            "create_kv_cache",
+            "softmax_with_temperature",
+            "get_metadata",
+        ]
 
     if args.quantization.mode != "no":
+<<<<<<< HEAD
         mod = mlc_llm.transform.GroupQuantize(  # pylint: disable=not-callable
             group_size=40 if args.quantization.mode.endswith("3") else 32,
             sym=args.quantization.sym,
@@ -287,15 +304,41 @@ def mod_transform_before_build(
     mod = relax.pipeline.get_pipeline()(mod)
     mod = mlc_llm.transform.FuseDecodeMatmulEwise(args.quantization.model_dtype, args.target_kind)(mod)
     debug_dump_script(mod, "mod_before_DCE.py", args)
+=======
+        if ARGS.model.startswith("rwkv-"):
+            mod = mlc_llm.transform.RWKVQuantize(  # pylint: disable=not-callable
+                mode=args.quantization.mode,
+                dtype=args.quantization.model_dtype,
+            )(mod)
+        else:
+            mod = mlc_llm.transform.GroupQuantize(  # pylint: disable=not-callable
+                group_size=40 if args.quantization.mode.endswith("3") else 32,
+                sym=args.quantization.sym,
+                mode=args.quantization.mode,
+                storage_nbit=args.quantization.storage_nbit,
+                dtype=args.quantization.model_dtype,
+            )(mod)
+    mod = mlc_llm.transform.FuseTransposeMatmul()(mod)  # pylint: disable=not-callable
+    mod = relax.pipeline.get_pipeline()(mod)  # pylint: disable=no-value-for-parameter
+    mod = mlc_llm.transform.FuseDecodeMatmulEwise(  # pylint: disable=not-callable
+        args.quantization.model_dtype, args.target_kind
+    )(mod)
+>>>>>>> upstream/main
     mod = relax.transform.DeadCodeElimination(model_names)(mod)
     mod = relax.transform.LiftTransformParams()(mod)
     mod_transform, mod_deploy = utils.split_transform_deploy_mod(mod, model_names)
 
     debug_dump_script(mod_transform, "mod_lift_params.py", args)
+    debug_dump_script(mod_deploy, "mod_deploy.py", args)
 
+<<<<<<< HEAD
     new_params = utils.transform_params(mod_transform, model_params)
     if not args.skip_param_dump:
         utils.save_params(new_params, args.artifact_path)
+=======
+    new_params = utils.transform_params(mod_transform, model_params, args)
+    utils.save_params(new_params, args.artifact_path)
+>>>>>>> upstream/main
     return mod_deploy
 
 
@@ -318,6 +361,7 @@ def dump_default_mlc_chat_config(args):
     config["repetition_penalty"] = 1.0
     config["top_p"] = 0.95
     config["mean_gen_len"] = 128
+    config["max_gen_len"] = 512
     config["shift_fill_factor"] = 0.3
     config["tokenizer_files"] = utils.get_tokenizer_files(params_path)
 
@@ -338,11 +382,11 @@ def build(mod_deploy: tvm.IRModule, args: argparse.Namespace) -> None:
     if target_kind != "cpu":
         db = utils.get_database(args.db_path)  # pylint: disable=invalid-name
         with db, tvm.target.Target("apple/m1-gpu-restricted"):
-            mod_deploy = relax.transform.MetaScheduleApplyDatabase()(mod_deploy)
             if args.target_kind == "android":
                 mod_deploy = mlc_llm.dispatch.DispatchTIROperatorAdreno()(  # pylint: disable=not-callable
                     mod_deploy
                 )
+            mod_deploy = relax.transform.MetaScheduleApplyDatabase()(mod_deploy)
             mod_deploy = (
                 mlc_llm.dispatch.DispatchTIROperator(  # pylint: disable=not-callable
                     args.model_category
@@ -396,6 +440,7 @@ def main():
     cache_path = os.path.join(
         ARGS.artifact_path, f"mod_cache_before_build_{ARGS.target_kind}.pkl"
     )
+    ARGS.raw_params_path = os.path.join(ARGS.artifact_path, "raw_params")
     use_cache = ARGS.use_cache and os.path.isfile(cache_path)
     with open(os.path.join(ARGS.model_path, "config.json"), encoding="utf-8") as i_f:
         config = json.load(i_f)
@@ -406,6 +451,8 @@ def main():
                 mod, params = gpt_neox.get_model(ARGS, config)
             elif ARGS.model_category == "moss":
                 mod, params = moss.get_model(ARGS, config)
+            elif ARGS.model_category == "rwkv":
+                mod, params = rwkv.get_model(ARGS, config)
             else:
                 raise ValueError(f"Model {ARGS.model} not supported")
             mod = mod_transform_before_build(mod, params, ARGS)
@@ -424,7 +471,7 @@ def main():
         if not ARGS.reuse_lib:
             build(mod, ARGS)
         else:
-            print("Reuse existing preuilt lib {ARGS.reuse_lib}...")
+            print("Reuse existing prebuilt lib {ARGS.reuse_lib}...")
         dump_default_mlc_chat_config(ARGS)
 
 

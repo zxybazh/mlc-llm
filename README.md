@@ -2,7 +2,7 @@
 
 # MLC LLM
 
-| [Project Page](https://mlc.ai/mlc-llm/) | [Blog](https://mlc.ai/blog/blog/2023/05/01/bringing-accelerated-llm-to-consumer-hardware) | [WebLLM](https://mlc.ai/web-llm/) | [WebStableDiffusion](https://mlc.ai/web-stable-diffusion/) | [Discord][discord-url]
+| [Project Page](https://mlc.ai/mlc-llm/) | [Blog](https://mlc.ai/blog/2023/05/01/bringing-accelerated-llm-to-consumer-hardware) | [WebLLM](https://mlc.ai/web-llm/) | [WebStableDiffusion](https://mlc.ai/web-stable-diffusion/) | [Discord][discord-url]
 
 MLC LLM is a **universal solution** that allows **any language models** to be **deployed natively** on a diverse set of hardware backends and native applications, plus a **productive framework** for everyone to further optimize model performance for their own use cases.
 
@@ -39,7 +39,7 @@ MLC LLM offers a repeatable, systematic, and customizable workflow that empowers
 
 ## How does MLC Enable Universal Native Deployment?
 
-The cornerstone of our solution is machine learning compilation ([MLC](https://mlc.ai/)), which we leverage to efficiently deploy AI models. We build on the shoulders of open-source ecosystems, including tokenizers from HuggingFace and Google, as well as open-source LLMs like Llama, Vicuna, Dolly, MOSS and more. Our primary workflow is based on [Apache TVM Unity](https://github.com/apache/tvm/tree/unity), an exciting ongoing development in the Apache TVM Community.
+The cornerstone of our solution is machine learning compilation ([MLC](https://mlc.ai/)), which we leverage to efficiently deploy AI models. We build on the shoulders of open-source ecosystems, including tokenizers from Hugging Face and Google, as well as open-source LLMs like Llama, Vicuna, Dolly, MOSS, RWKV and more. Our primary workflow is based on [Apache TVM Unity](https://github.com/apache/tvm/tree/unity), an exciting ongoing development in the Apache TVM Community.
 
 - Dynamic shape: We bake a language model as a TVM IRModule with native dynamic shape support, avoiding the need for extra padding to the maximum length and reducing both computation amount and memory usage.
 - Composable ML compilation optimizations: we perform many model deployment optimizations, such as better compilation code transformation, fusion, memory planning, library offloading and manual code optimization can be easily incorporated as TVM's IRModule transformations exposed as Python APIs.
@@ -66,20 +66,20 @@ To download the weights from an existing Hugging Face repository for a supported
 # Create a new conda environment and install dependencies
 conda create -n mlc-llm-env python
 conda activate mlc-llm-env
-pip install torch transformers # Install PyTorch and HuggingFace transformers
+pip install torch transformers # Install PyTorch and Hugging Face transformers
 pip install -I mlc_ai_nightly -f https://mlc.ai/wheels # Install TVM
 
 # Install Git and Git-LFS if you haven't already.
-# They are used for downloading the model weights from HuggingFace.
+# They are used for downloading the model weights from Hugging Face.
 conda install git git-lfs
 git lfs install
 
 # Clone the MLC LLM repo
-git clone https://github.com/mlc-ai/mlc-llm.git
+git clone --recursive https://github.com/mlc-ai/mlc-llm.git
 cd mlc-llm
 
 # Create the local build directory and compile the model
-# This will automatically download the parameters, tokenizer, and config from HuggingFace
+# This will automatically download the parameters, tokenizer, and config from Hugging Face
 python build.py --hf-path=databricks/dolly-v2-3b
 ```
 
@@ -112,4 +112,4 @@ walkthrough of our approaches.
 
 This project is initiated by members from CMU catalyst, UW SAMPL, SJTU, OctoML and the MLC community. We would love to continue developing and supporting the open-source ML community.
 
-This project is only possible thanks to the shoulders open-source ecosystems that we stand on. We want to thank the Apache TVM community and developers of the TVM Unity effort. The open-source ML community members made these models publicly available. PyTorch and Hugging Face communities that make these models accessible. We would like to thank the teams behind Vicuna, SentencePiece, LLaMA, Alpaca and MOSS. We also would like to thank the Vulkan, Swift, C++, Python Rust communities that enables this project.
+This project is only possible thanks to the shoulders open-source ecosystems that we stand on. We want to thank the Apache TVM community and developers of the TVM Unity effort. The open-source ML community members made these models publicly available. PyTorch and Hugging Face communities that make these models accessible. We would like to thank the teams behind Vicuna, SentencePiece, LLaMA, Alpaca, MOSS and RWKV. We also would like to thank the Vulkan, Swift, C++, Python Rust communities that enables this project.
