@@ -390,11 +390,11 @@ class TorchModelWrapper(ModelWrapper):
                 break
 
 class LlamaCppModelWrapper(ModelWrapper):
-    from llama_cpp import Llama, llama_token
+    
     name: str = "llama_cpp_model_wrapper"  # name of the model wrapper
     ggml_file_path: str  # path to the ggml model binary path
-    model: Llama  # llama model object
-    tokens: List[llama_token]  # llama tokens
+    model: "Llama"  # llama model object
+    tokens: List["llama_token"]  # llama tokens
 
     def __init__(
         self,
@@ -419,6 +419,7 @@ class LlamaCppModelWrapper(ModelWrapper):
         lora_path: Optional[str] = None,
         verbose: bool = True,
     ):
+        from llama_cpp import Llama, llama_token
         super().__init__(tokenizer, max_gen_len, conv_template)
 
         self.name = f"llama_cpp_model_wrapper"
