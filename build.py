@@ -11,8 +11,9 @@ from tvm import relax
 
 import mlc_llm
 from mlc_llm import utils
-from mlc_llm.relax_model import gpt_neox, llama, moss,  rwkv
+from mlc_llm.relax_model import gpt_neox, llama, moss, rwkv
 from mlc_llm.transform import rewrite_attention
+
 
 def _parse_args():
     args = argparse.ArgumentParser()
@@ -233,14 +234,26 @@ def debug_dump_shader(ex, name, args):
 
 
 def cuda_offload(mod, args):
+    import tvm.contrib.cutlass
     import tvm.relax.backend.contrib.cublas
-    import tvm.relax.backend.contrib.cutlass
     from tvm.relax.backend import get_patterns_with_prefix
+    from tvm.relax.backend.contrib.cutlass import annotate_workspace
+    from tvm.relax.dpl import rewrite_call
+
+    from mlc_llm.transform import combine_parallel_transposed_matmul
 
     debug_dump_script(mod, "mod_before_cuda_offload.py", args)
 
+    mod["prefill"] = rewrite_attention(mod["prefill"])
+    mod["decode"] = rewrite_attention(mod["decode"])
+    mod = relax.transform.CombineParallelMatmul()(mod)
+    debug_dump_script(mod, "mod_after_cuda_rewrite.py", args)
+
     patterns_to_use = []
 
+    if args.cutlass_offload:
+        # Use cutlass attention before cublas
+        patterns_to_use += get_patterns_with_prefix("cutlass.attention")
     if args.cublas_offload:
         patterns_to_use += get_patterns_with_prefix("cublas")
     if args.cutlass_offload:
@@ -252,11 +265,19 @@ def cuda_offload(mod, args):
         annotate_codegen=True,
     )
     mod = partition_pass(mod)
+    mod = annotate_workspace(mod)
+    mod = relax.transform.AllocateWorkspace()(mod)
     debug_dump_script(mod, "mod_after_cuda_partition.py", args)
 
     codegen_pass = relax.transform.RunCodegen(
         {"cutlass": {"sm": 80, "find_first_valid": False}},
-        entry_functions=["prefill", "decode", "create_kv_cache", "softmax_with_temperature", "get_metadata"],
+        entry_functions=[
+            "prefill",
+            "decode",
+            "create_kv_cache",
+            "softmax_with_temperature",
+            "get_metadata",
+        ],
     )
     mod = codegen_pass(mod)
     debug_dump_script(mod, "mod_after_cuda_codegen.py", args)
@@ -301,7 +322,7 @@ def mod_transform_before_build(
                 storage_nbit=args.quantization.storage_nbit,
                 dtype=args.quantization.model_dtype,
             )(mod)
-    
+
     if args.target_kind == "cuda":
         mod = cuda_offload(mod, args)
     mod = mlc_llm.transform.FuseTransposeMatmul()(mod)  # pylint: disable=not-callable

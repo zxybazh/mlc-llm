@@ -7,3 +7,4 @@ from .transpose_matmul import FuseTransposeMatmul
 from .decode_matmul_ewise import FuseDecodeMatmulEwise
 from .allow_nonaligned_inputs import AllowNonAlignedInputs
 from .rewrite_attention import rewrite_attention
+from .combine_parallel_matmul import combine_parallel_transposed_matmul

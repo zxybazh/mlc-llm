@@ -162,13 +162,13 @@ class TvmModelWrapper(ModelWrapper):
             if cur_pos == start_pos:
                 # TODO: switch to the below when Eric's PR is merged.
                 # tok = tvm.nd.from_dlpack(tokens[:, :cur_pos])
-                tok = tvm.nd.array(tokens[:, :cur_pos].numpy(), self.tvm_device)
+                tok = tvm.nd.array(tokens[:, :cur_pos].cpu().numpy(), self.tvm_device)
                 logits = self.model(tok)
             else:
                 # TODO: switch to the below when Eric's PR is merged.
                 # tok = tvm.nd.from_dlpack(tokens[:, cur_pos - 1 : cur_pos])
                 tok = tvm.nd.array(
-                    tokens[:, cur_pos - 1 : cur_pos].numpy(), self.tvm_device
+                    tokens[:, cur_pos - 1 : cur_pos].cpu().numpy(), self.tvm_device
                 )
                 logits = self.model(tok)
 
@@ -230,13 +230,13 @@ class TvmModelWrapper(ModelWrapper):
             if cur_pos == start_pos:
                 # TODO: switch to the below when Eric's PR is merged.
                 #    tok = tvm.nd.from_dlpack(tokens[:, :cur_pos])
-                tok = tvm.nd.array(tokens[:, :cur_pos].numpy(), self.tvm_device)
+                tok = tvm.nd.array(tokens[:, :cur_pos].cpu().numpy(), self.tvm_device)
                 logits = self.model(tok)
             else:
                 # TODO: switch to the below when Eric's PR is merged.
                 #    tok = tvm.nd.from_dlpack(tokens[:, cur_pos - 1 : cur_pos])
                 tok = tvm.nd.array(
-                    tokens[:, cur_pos - 1 : cur_pos].numpy(), self.tvm_device
+                    tokens[:, cur_pos - 1 : cur_pos].cpu().numpy(), self.tvm_device
                 )
                 logits = self.model(tok)
 
@@ -575,7 +575,6 @@ def get_model_wrapper(mode, tokenizer, ARGS):
             ARGS.quantization.name,
             ARGS.quantization.model_dtype,
             tvm_device=ARGS.device_name,
-            torch_device="cpu", # TODO: change to "cuda" when dlpack conversion works.
         )
     elif mode.startswith("torch-"):
         return TorchModelWrapper(
