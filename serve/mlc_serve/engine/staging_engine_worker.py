@@ -5,10 +5,10 @@ import time
 import multiprocessing
 import multiprocessing.synchronize
 from dataclasses import dataclass
-from threading import Thread
-from typing import Callable, Optional, Union, Any, Dict, List
-
+from threading import Condition, Lock, Thread
+from typing import Callable, Optional, Union, Tuple, Any, Dict, Deque, List
 import structlog
+import numpy as np
 
 from .base import FinishReason, RequestId, RequestState, ValidationError, SequenceId
 from .metrics import PrometheusMetrics
@@ -33,7 +33,7 @@ class ShutdownCommand:
 
 @dataclass
 class AddRequestsCommand:
-    request_states: list[RequestState]
+    request_states: List[RequestState]
 
 
 @dataclass
@@ -54,14 +54,15 @@ GenerationLoopWorkerCommand = Union[
 @dataclass
 class SequenceGenerationOutput:
     id: SequenceId
-    new_tokens: list[int]
+    new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
+    logprob_info: Optional[Tuple[Tuple, List[Tuple]]] = None
 
 
 @dataclass
 class GenerationLoopWorkerOutput:
-    sequences: list[SequenceGenerationOutput]
+    sequences: List[SequenceGenerationOutput]
     error: Optional[str] = None
 
 
@@ -77,8 +78,8 @@ class GenerationLoopWorker(EngineBase):
     ):
         EngineBase.__init__(self, model_module)
 
-        self.cancelled_requests = list[RequestState]()
-        self.stopped_requests = list[RequestState]()
+        self.cancelled_requests: List[RequestState] = []
+        self.stopped_requests: List[RequestState] = []
 
         self.prom_metrics = PrometheusMetrics()
         self.inv_kv_cache_size = 1.0 / self.cache_manager.get_kv_cache_size()
@@ -167,7 +168,7 @@ class GenerationLoopWorker(EngineBase):
     def step(self) -> GenerationLoopWorkerOutput:
         LOG.debug("Starting new inference step.")
 
-        outputs = list[SequenceGenerationOutput]()
+        outputs: List[SequenceGenerationOutput] = []
         result = GenerationLoopWorkerOutput(sequences=outputs)
 
         # TODO: consolidate into a single function
@@ -263,7 +264,7 @@ class GenerationLoopWorker(EngineBase):
 
             gen_seq.generated_token_ids.extend(new_tokens)
             outputs.append(
-                SequenceGenerationOutput(id=res.sequence_id, new_tokens=new_tokens)
+                SequenceGenerationOutput(id=res.sequence_id, new_tokens=new_tokens, logprob_info=res.logprob_info)
             )
 
             if is_prompt_batch:

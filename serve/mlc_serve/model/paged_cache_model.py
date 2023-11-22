@@ -1,7 +1,9 @@
 import math
 import os
-from typing import List, Union, Optional
 from pathlib import Path
+from collections import defaultdict
+from typing import List, Union, Optional, Tuple
+from dataclasses import dataclass
 
 import structlog
 import numpy as np
@@ -19,6 +21,7 @@ from ..engine import (
     SamplingType,
     MLCServeEngineConfig,
     SamplingParams,
+    TOP_LOGPROBS_NUMBER,
     SequenceId,
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
@@ -27,6 +30,7 @@ from ..engine.model_module import (
     DecodeRequest,
     PrefillRequest,
     TextGenerationResult,
+    LOGPROBS_TYPE
 )
 from ..engine.model_module import ModelModule
 
@@ -61,7 +65,7 @@ def sample(
     sampling_params: List[SamplingParams],
     vocab_size: int,
     check_safety=False,
-) -> Optional[np.ndarray]:
+) -> Optional[Tuple[np.ndarray, Optional[LOGPROBS_TYPE]]]:
     def _is_safe_to_sample(prob_like):
         return (
             torch.sum(torch.isnan(prob_like) | torch.isinf(prob_like) | (prob_like < 0))
@@ -80,10 +84,21 @@ def sample(
     logits_greedy = logits[mask_greedy]
 
     if logits_greedy.shape[0] > 0:
-        res_greedy = torch.argmax(logits_greedy, -1).cpu().numpy()
-
+        # Greedy sampling
+        logprobs = torch.log_softmax(logits_greedy, dim=-1)
+        res_greedy_logprob, res_greedy = torch.max(logprobs, dim=-1)
+        
+        top_greedy_logprob, top_greedy = torch.topk(
+            logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+        )
+        # Convert to numpy
+        res_greedy_logprob = res_greedy_logprob.cpu().numpy()
+        res_greedy = res_greedy.cpu().numpy()
+        top_greedy_logprob = top_greedy_logprob.cpu().numpy()
+        top_greedy = top_greedy.cpu().numpy()
+        # Case when there's only greedy sampling
         if logits_greedy.shape[0] == num_seq:
-            return res_greedy
+            return res_greedy, ((res_greedy, res_greedy_logprob), (top_greedy, top_greedy_logprob))
 
     temperatures = []
     top_ps = []
@@ -114,22 +129,40 @@ def sample(
         logits = _apply_top_p_top_k(logits_random, top_ps, top_ks)
 
     probs = torch.softmax(logits_random, dim=-1)
+    logprobs = torch.log_softmax(logits_greedy, dim=-1)
+    top_random_logprob, top_random = torch.topk(
+        logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+    )
+    top_random_logprob = top_random_logprob.cpu().numpy()
+    top_random = top_random.cpu().numpy()
 
     if check_safety and not _is_safe_to_sample(probs):
         return None
 
     res_random = torch.multinomial(probs, 1, True).cpu().numpy()[:, 0]
+    res_random_logprobs = torch.gather(logprobs, dim=-1, index=torch.tensor(res_random, dtype=torch.int64, device=logits.device)).cpu().numpy()
 
     if logits_random.shape[0] == num_seq:
-        return res_random
+        return res_random, (res_random_logprobs, (top_random, top_random_logprob))
 
     res = np.empty((num_seq,), dtype=np.int32)
+    res_logprobs = np.empty((num_seq,), dtype=np.float32)
+    top = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.int32)
+    top_logprobs = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.float32)
+
     res[mask_random] = res_random
+    res_logprobs[mask_random] = res_random_logprobs
+    top[mask_random] = top_random
+    top_logprobs[mask_random] = top_random_logprob
+
 
     if logits_greedy.shape[0] > 0:
         res[mask_greedy] = res_greedy
+        res_logprobs[mask_greedy] = res_greedy_logprob
+        top[mask_greedy] = top_greedy
+        top_logprobs[mask_greedy] = top_greedy_logprob
 
-    return res
+    return res, ((res, res_logprobs), (top, top_logprobs))
 
 
 def load_disco_module(artifact_path, lib_path, num_shards):
@@ -173,6 +206,26 @@ def get_tvm_model(config, dev):
         return vm.module, params, None
 
     return load_disco_module(config.model_artifact_path, lib_path, config.num_shards)
+
+
+def fetch_logprobs(
+        logprob_info: LOGPROBS_TYPE,
+        index: int,
+        sampling_param: SamplingParams,
+    ) -> Optional[Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]]:
+    """Fetch the logprob information with index"""
+    if (
+        sampling_param.logprobs is None or
+        not sampling_param.logprobs or
+        logprob_info is None
+    ):
+        return None
+    (res, res_logprobs), (top, top_logprobs) = logprob_info
+    return (res[index],res_logprobs[index]), \
+        zip(
+            top[index][:sampling_param.top_logprobs],
+            top_logprobs[index][:sampling_param.top_logprobs]
+        )
 
 
 def _prepare_inputs(
@@ -412,13 +465,6 @@ class Model:
                     slot_mapping,
                     self.params,
                 )
-
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[
-                    0
-                ]  # Ignore returned KV cache since it is updated in-place anyway.
         else:
             torch.cuda.nvtx.range_push(f"forward decode {input_shape}")
 
@@ -435,10 +481,12 @@ class Model:
                 self.params,
             )
 
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[0]
+        if self.disco_session:
+            logits, _ = out.debug_get_from_remote(0)
+        else:
+            logits = out[
+                0
+            ]  # Ignore returned KV cache since it is updated in-place anyway.
 
         torch.cuda.synchronize()
         torch.cuda.nvtx.range_pop()
@@ -460,7 +508,7 @@ class Model:
             cache.pending_copy_from_to = []
 
         try:
-            next_tokens = sample(logits, sampling_params, self.vocab_size)
+            next_tokens, logprob_info = sample(logits, sampling_params, self.vocab_size)
             assert next_tokens is not None
 
             outputs = []
@@ -474,6 +522,7 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
+                                logprob_info=fetch_logprobs(logprob_info, seq_id, sampling_params[seq_id]),
                             )
                         )
                 else:
@@ -482,6 +531,7 @@ class Model:
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
+                            logprob_info=fetch_logprobs(logprob_info, index, sampling_params[index]),
                         )
                     )
 
@@ -497,7 +547,7 @@ class Model:
             for i, (sequence_id, logits_per_token, sampling_param) in enumerate(
                 zip(sequence_ids, torch.from_dlpack(logits), sampling_params)
             ):
-                maybe_new_token = sample(
+                maybe_new_token, logprob_info = sample(
                     torch.unsqueeze(logits_per_token, 0),
                     [sampling_param],
                     self.vocab_size,
@@ -514,6 +564,7 @@ class Model:
                                     ),
                                     generated_tokens=[maybe_new_token[0]],  # type: ignore
                                     error=None,
+                                    logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                                 )
                             )
                     else:
@@ -522,6 +573,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[maybe_new_token[0]],  # type: ignore
                                 error=None,
+                                logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                             )
                         )
                 else:
@@ -534,6 +586,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
+                                    logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                                 )
                             )
                     else:
@@ -542,6 +595,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
+                                logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                             )
                         )
 
@@ -575,8 +629,8 @@ class PagedCacheModelTextGenerator:
         self.model = model
 
     def generate(
-        self, requests: list[Union[PrefillRequest, DecodeRequest]], kv_cache
-    ) -> list[TextGenerationResult]:
+        self, requests: List[Union[PrefillRequest, DecodeRequest]], kv_cache
+    ) -> List[TextGenerationResult]:
         prefill_requests = [r for r in requests if isinstance(r, PrefillRequest)]
         decode_requests = [r for r in requests if isinstance(r, DecodeRequest)]
 

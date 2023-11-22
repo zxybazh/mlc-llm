@@ -1,6 +1,7 @@
 import asyncio
 import structlog
-from typing import AsyncIterator, Any
+from typing import AsyncIterator, Any, Dict
+import logging
 
 from .base import (
     InferenceEngine,
@@ -29,7 +30,7 @@ class AsyncEngineConnector:
         self.engine_loop_task = None
         self.engine_loop_exception = None
         self.shutdown_event = asyncio.Event()
-        self.result_queues = dict[RequestId, ResultQueue]()
+        self.result_queues: Dict[RequestId, ResultQueue] = {}
 
     async def start(self):
         """
