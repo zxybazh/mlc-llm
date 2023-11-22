@@ -225,6 +225,7 @@ class SynchronousInferenceEngine(InferenceEngine):
                             num_generated_tokens=(
                                 len(state.token_ids) - state.prompt_len
                             ),
+                            logprob_info=res.logprob_info
                         ),
                     ],
                     num_prompt_tokens=state.prompt_len,

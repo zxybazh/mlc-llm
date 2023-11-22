@@ -52,13 +52,14 @@ def create_engine(
         ))
     return engine
 
-def create_request(idx, prompt, temp, max_tokens, stop, ignore_eos):
+def create_request(idx, prompt, temp, max_tokens, stop, ignore_eos, logprobs):
     return Request(
         request_id = str(idx),
         messages = [ChatMessage(role="user", content=prompt)],
         sampling_params = SamplingParams(
                             temperature=0.0,
-        ),
+                            logprobs=logprobs
+        ), 
         stopping_criteria = StoppingCriteria(
             max_tokens=max_tokens,
             stop_sequences=stop
@@ -219,6 +220,43 @@ def test_stop(
     if use_staging_engine:
         engine.stop()
 
+def test_logprobs(
+    model_artifact_path, 
+    use_staging_engine, 
+    max_num_sequences=4,
+    max_input_len=512,
+    num_requests=5,
+    logprobs=3,
+):
+    prompt = "hi"
+    engine = create_engine(
+        model_artifact_path,
+        use_staging_engine,
+        max_num_sequences,
+        max_input_len,
+    )
+    s = 113
+    requests = [create_request(idx=str(n-s), prompt=prompt, temp=0, max_tokens=n, stop=None, ignore_eos=True, logprobs=logprobs) for n in range(s, s+num_requests)]
+    engine.add(requests)
+
+    generated = ["" for _ in range(num_requests)]
+
+    while engine.has_pending_requests():
+        results = engine.step()
+        for res in results.outputs:
+            assert len(res.sequences) == 1
+            seq = res.sequences[0]
+
+            assert seq.finish_reason is not None or len(list(seq.logprob_info[1])) == logprobs
+
+            if seq.is_finished:
+                assert seq.num_generated_tokens == requests[int(res.request_id)].stopping_criteria.max_tokens
+                assert seq.finish_reason == FinishReason.Length
+            else:
+                generated[int(res.request_id)] += seq.delta
+
+    if use_staging_engine:
+        engine.stop()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -235,3 +273,5 @@ if __name__ == "__main__":
     test_stop(model_artifact_path, use_staging_engine=True)
     test_max_context_length(model_artifact_path, use_staging_engine=True)
     test_max_context_length(model_artifact_path, use_staging_engine=False)
+    test_logprobs(model_artifact_path, use_staging_engine=True)
+    test_logprobs(model_artifact_path, use_staging_engine=False)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from functools import cached_property
 
+from typing import Optional
 
 _SAMPLING_EPS = 1e-5
 
@@ -37,6 +38,9 @@ class SamplingParams:
             to consider. Must be in (0, 1]. Set to 1 to consider all tokens.
         top_k: Integer that controls the number of top tokens to consider. Set
             to -1 to consider all tokens.
+        logprobs: Optional[Integer] that determines number of log probabilities
+            to return per sampled tokens, default to None meaning disabled,
+            otherwise minimum 0, maximum 5.
     """
 
     presence_penalty: float = 0.0
@@ -44,6 +48,7 @@ class SamplingParams:
     temperature: float = 1.0
     top_p: float = 1.0
     top_k: int = -1
+    logprobs: Optional[int] = None
 
     def __post_init__(self):
         self._verify_args()
@@ -70,6 +75,10 @@ class SamplingParams:
         if self.top_k < -1 or self.top_k == 0:
             raise ValueError(
                 f"top_k must be -1 (disable), or at least 1, " f"got {self.top_k}."
+            )
+        if self.logprobs is not None and (self.logprobs < 0 or self.logprobs > 5):
+            raise ValueError(
+                f"logprobs must be between 0 and 5, got {self.logprobs}."
             )
 
     def _verify_greedy_sampling(self) -> None:

@@ -6,9 +6,9 @@ import multiprocessing
 from collections import deque
 from dataclasses import dataclass
 from threading import Condition, Lock, Thread
-from typing import Callable, Optional, Union, Any, Dict, Deque, List
-
+from typing import Callable, Optional, Union, Tuple, Any, Dict, Deque, List
 import structlog
+import numpy as np
 
 from .base import FinishReason, RequestId, RequestState
 from .model_module import DecodeRequest, ModelModule, PrefillRequest, SequenceId, TextGenerator, Tokenizer as TokenizerP
@@ -24,7 +24,7 @@ class ShutdownCommand:
 
 @dataclass
 class AddRequestsCommand:
-    request_states: list[RequestState]
+    request_states: List[RequestState]
 
 
 @dataclass
@@ -45,14 +45,15 @@ GenerationLoopWorkerCommand = Union[
 @dataclass
 class SequenceGenerationOutput:
     id: SequenceId
-    new_tokens: list[int]
+    new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[str] = None
+    logprob_info: Optional[Tuple[Tuple, List[Tuple]]] = None
 
 
 @dataclass
 class GenerationLoopWorkerOutput:
-    sequences: list[SequenceGenerationOutput]
+    sequences: List[SequenceGenerationOutput]
     error: Optional[str] = None
 
 
@@ -96,13 +97,13 @@ class GenerationLoopWorker:
         assert self.prompt_allocate_ratio >= 1.0
 
         self.queue_lock = Lock()
-        self.queue = deque[RequestState]()
+        self.queue: Deque[RequestState] = deque()
         self.has_new_requests = Condition(lock=self.queue_lock)
 
-        self.cancelled_requests = list[RequestState]()
-        self.stopped_requests = list[RequestState]()
+        self.cancelled_requests: List[RequestState] = []
+        self.stopped_requests: List[RequestState] = []
 
-        self.current_batch = dict[RequestId, RequestState]()
+        self.current_batch: Dict[RequestId, RequestState] = {}
 
     def add(self, request_states: list[RequestState]):
         LOG.debug("GenerationLoopWorker", requests_states=request_states)
@@ -158,7 +159,7 @@ class GenerationLoopWorker:
     def step(self) -> GenerationLoopWorkerOutput:
         LOG.debug("Starting new inference step.")
 
-        outputs = list[SequenceGenerationOutput]()
+        outputs: List[SequenceGenerationOutput] = []
         result = GenerationLoopWorkerOutput(sequences=outputs)
 
         # TODO: consolidate into a single function
@@ -253,7 +254,7 @@ class GenerationLoopWorker:
 
             state.token_ids.extend(new_tokens)
             outputs.append(
-                SequenceGenerationOutput(id=res.sequence_id, new_tokens=new_tokens)
+                SequenceGenerationOutput(id=res.sequence_id, new_tokens=new_tokens, logprob_info=res.logprob_info)
             )
 
         LOG.debug("Finished state update and stopping criteria check.")
