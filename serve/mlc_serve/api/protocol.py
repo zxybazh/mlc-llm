@@ -2,7 +2,7 @@
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 # https://github.com/vllm-project/vllm/blob/acbed3ef40f015fcf64460e629813922fab90380/vllm/entrypoints/openai/protocol.py
 import time
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -71,11 +71,18 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: Optional[Dict[int, float]] = None
     user: Optional[str] = None
     ignore_eos: Optional[bool] = False
+    logprobs: Optional[bool] = False
+    top_logprobs: Optional[int] = None
+
+
+class Logprobs(BaseModel):
+    content: Optional[List[Dict]]
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
+    logprobs: Optional[Logprobs]
     finish_reason: Optional[Literal["stop", "length", "cancelled"]] = None
 
 
@@ -96,6 +103,7 @@ class DeltaMessage(BaseModel):
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
+    logprob_info: Optional[Tuple[Tuple, List[Tuple]]]
     finish_reason: Optional[Literal["stop", "length"]] = None
 
 

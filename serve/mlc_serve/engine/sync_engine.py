@@ -218,6 +218,7 @@ class SynchronousInferenceEngine(InferenceEngine, EngineBase):
                     delta,
                     num_generated_tokens=len(gen_seq.generated_token_ids),
                     finish_reason=finish_reason,
+                    logprob_info=res.logprob_info,
                 )
             )
 

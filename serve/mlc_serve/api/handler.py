@@ -42,7 +42,6 @@ def create_error_response(status_code: HTTPStatus, message: str) -> JSONResponse
 
 router = APIRouter()
 
-
 def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
     sampling_params = SamplingParams(
         # These params came from vllm
@@ -64,6 +63,9 @@ def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
         sampling_params.top_p = request.top_p
     if request.logit_bias is not None:
         sampling_params.logit_bias = request.logit_bias
+    if request.logprobs is not None:
+        sampling_params.top_logprobs = request.top_logprobs
+        sampling_params.logprobs = request.logprobs
     return sampling_params
 
 
@@ -156,7 +158,7 @@ async def generate_completion_stream(
     created_time = int(time.time())
 
     def create_stream_response(
-        choices: list[ChatCompletionResponseStreamChoice],
+        choices: List[ChatCompletionResponseStreamChoice],
     ) -> ChatCompletionStreamResponse:
         return ChatCompletionStreamResponse(
             id=request_id,
@@ -176,7 +178,6 @@ async def generate_completion_stream(
         ],
     )
     yield f"data: {json.dumps(first_chunk.dict(exclude_unset=True), ensure_ascii=False)}\n\n"
-
     async for res in result_generator:
         if res.error:
             raise RuntimeError(f"Error when generating: {res.error}")
@@ -192,6 +193,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
+                    logprob_info=seq.logprob_info[0] if seq.logprob_info else None
                 )
                 for seq in res.sequences
             ]
@@ -212,6 +214,7 @@ async def collect_result_stream(
     finish_reasons = [None] * num_sequences
     num_prompt_tokens = 0
     num_generated_tokens = [0 for _ in range(num_sequences)]
+    logprob_infos = [[] for _ in range(num_sequences)]
     async for res in result_generator:
         # TODO: verify that the request cancellation happens after this returns
         if res.error:
@@ -219,6 +222,8 @@ async def collect_result_stream(
         if res.num_prompt_tokens is not None:
             num_prompt_tokens = res.num_prompt_tokens
         for seq in res.sequences:
+            if seq.logprob_info:
+                logprob_infos[seq.index].append(seq.logprob_info)
             if seq.index >= len(sequences):
                 raise RuntimeError(f"Unexpected sequence index: {seq.index}.")
             num_generated_tokens[seq.index] = seq.num_generated_tokens
@@ -229,15 +234,30 @@ async def collect_result_stream(
             if seq.is_finished:
                 assert seq.finish_reason is not None
                 finish_reasons[seq.index] = seq.finish_reason.value  # type: ignore
-
-    choices = [
-        ChatCompletionResponseChoice(
+    
+    choices = []
+    for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons)):
+        choice = ChatCompletionResponseChoice(
             index=index,
             message=ChatMessage(role="assistant", content="".join(chunks)),
             finish_reason=finish_reason,
         )
-        for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons))
-    ]
+        content = []
+        if logprob_infos[index] != []:
+            for logprob_info in logprob_infos[index]:
+                content.append({
+                    "token": str(logprob_info[0][0]),
+                    "logprob": float(logprob_info[0][1]),
+                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    "bytes": None,
+                    "top_logprobs": [{
+                        "token": top_logprob[0],
+                        "logprob": top_logprob[1],
+                        "bytes": None,
+                    } for top_logprob in logprob_info[1]],
+                })
+        choice.logprobs.content = content
+        choices.append(choice)
 
     usage = UsageInfo(
         prompt_tokens=num_prompt_tokens,
