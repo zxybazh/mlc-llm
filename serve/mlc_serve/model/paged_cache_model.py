@@ -16,7 +16,13 @@ from mlc_llm import utils
 
 from .base import get_model_artifact_config
 from .tokenizer import HfTokenizerModule, ConversationTemplate
-from ..engine import RequestId, SamplingType, MLCServeEngineConfig, SamplingParams
+from ..engine import (
+    RequestId,
+    SamplingType,
+    MLCServeEngineConfig,
+    SamplingParams,
+    TOP_LOGPROBS_NUMBER
+)
 from ..engine.model_module import (
     DecodeRequest,
     PrefillRequest,
@@ -272,7 +278,9 @@ def sample(
         logprobs = torch.log_softmax(logits_greedy, dim=-1)
         res_greedy_logprob, res_greedy = torch.max(logprobs, dim=-1)
         
-        top_greedy_logprob, top_greedy = torch.topk(logprobs, k=5, dim=-1, largest=True, sorted=True)
+        top_greedy_logprob, top_greedy = torch.topk(
+            logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+        )
         # Convert to numpy
         res_greedy_logprob = res_greedy_logprob.cpu().numpy()
         res_greedy = res_greedy.cpu().numpy()
@@ -312,7 +320,9 @@ def sample(
 
     probs = torch.softmax(logits_random, dim=-1)
     logprobs = torch.log_softmax(logits_greedy, dim=-1)
-    top_random_logprob, top_random = torch.topk(logprobs, k=5, dim=-1, largest=True, sorted=True)
+    top_random_logprob, top_random = torch.topk(
+        logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+    )
     top_random_logprob = top_random_logprob.cpu().numpy()
     top_random = top_random.cpu().numpy()
 
@@ -327,8 +337,8 @@ def sample(
 
     res = np.empty((num_seq,), dtype=np.int32)
     res_logprobs = np.empty((num_seq,), dtype=np.float32)
-    top = np.empty((num_seq, 5), dtype=np.int32)
-    top_logprobs = np.empty((num_seq, 5), dtype=np.float32)
+    top = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.int32)
+    top_logprobs = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.float32)
 
     res[mask_random] = res_random
     res_logprobs[mask_random] = res_random_logprobs

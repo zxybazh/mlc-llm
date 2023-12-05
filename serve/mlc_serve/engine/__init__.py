@@ -13,4 +13,4 @@ from .base import (
     MLCServeEngineConfig,
     get_engine_config
 )
-from .sampling_params import SamplingParams, SamplingType
+from .sampling_params import SamplingParams, SamplingType, TOP_LOGPROBS_NUMBER

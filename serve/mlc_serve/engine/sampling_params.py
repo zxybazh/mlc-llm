@@ -10,6 +10,7 @@ from functools import cached_property
 from typing import Optional
 
 _SAMPLING_EPS = 1e-5
+TOP_LOGPROBS_NUMBER = 5
 
 
 class SamplingType(IntEnum):
@@ -76,9 +77,9 @@ class SamplingParams:
             raise ValueError(
                 f"top_k must be -1 (disable), or at least 1, " f"got {self.top_k}."
             )
-        if self.logprobs is not None and (self.logprobs < 0 or self.logprobs > 5):
+        if self.logprobs is not None and (self.logprobs < 0 or self.logprobs > TOP_LOGPROBS_NUMBER):
             raise ValueError(
-                f"logprobs must be between 0 and 5, got {self.logprobs}."
+                f"logprobs must be between 0 and {TOP_LOGPROBS_NUMBER}, got {self.logprobs}."
             )
 
     def _verify_greedy_sampling(self) -> None:
