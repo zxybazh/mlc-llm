@@ -269,7 +269,7 @@ def sample(
 
     if logits_greedy.shape[0] > 0:
         # Greedy sampling
-        logprobs = torch.log(torch.softmax(logits_greedy, dim=-1))
+        logprobs = torch.log_softmax(logits_greedy, dim=-1)
         res_greedy_logprob, res_greedy = torch.max(logprobs, dim=-1)
         
         top_greedy_logprob, top_greedy = torch.topk(logprobs, k=5, dim=-1, largest=True, sorted=True)
@@ -311,7 +311,7 @@ def sample(
         logits = _apply_top_p_top_k(logits_random, top_ps, top_ks)
 
     probs = torch.softmax(logits_random, dim=-1)
-    logprobs = torch.log(torch.softmax(logits_greedy, dim=-1))
+    logprobs = torch.log_softmax(logits_greedy, dim=-1)
     top_random_logprob, top_random = torch.topk(logprobs, k=5, dim=-1, largest=True, sorted=True)
     top_random_logprob = top_random_logprob.cpu().numpy()
     top_random = top_random.cpu().numpy()
