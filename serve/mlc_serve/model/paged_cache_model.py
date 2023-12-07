@@ -632,13 +632,6 @@ class Model:
                 out = self.mod["prefill"](
                     input_ids, positions, seq_lens, kv_cache, slot_mapping, self.params
                 )
-
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[
-                    0
-                ]  # Ignore returned KV cache since it is updated in-place anyway.
         else:
             torch.cuda.nvtx.range_push(f"forward decode {input_shape}")
 
@@ -655,10 +648,12 @@ class Model:
                 self.params,
             )
 
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[0]
+        if self.disco_session:
+            logits, _ = out.debug_get_from_remote(0)
+        else:
+            logits = out[
+                0
+            ]  # Ignore returned KV cache since it is updated in-place anyway.
 
         torch.cuda.synchronize()
         torch.cuda.nvtx.range_pop()
