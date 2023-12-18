@@ -397,13 +397,17 @@ def fetch_logprobs(
         sampling_param: SamplingParams,
     ) -> Optional[Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]]:
     """Fetch the logprob information with index"""
-    if sampling_param.logprobs is None or logprob_info is None:
+    if (
+        sampling_param.logprobs is None or
+        not sampling_param.logprobs or
+        logprob_info is None
+    ):
         return None
     (res, res_logprobs), (top, top_logprobs) = logprob_info
     return (res[index],res_logprobs[index]), \
         zip(
-            top[index][:sampling_param.logprobs],
-            top_logprobs[index][:sampling_param.logprobs]
+            top[index][:sampling_param.top_logprobs],
+            top_logprobs[index][:sampling_param.top_logprobs]
         )
 
 

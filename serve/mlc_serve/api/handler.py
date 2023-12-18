@@ -59,6 +59,7 @@ def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
     if request.top_p is not None:
         sampling_params.top_p = request.top_p
     if request.logprobs is not None:
+        sampling_params.top_logprobs = request.top_logprobs
         sampling_params.logprobs = request.logprobs
     return sampling_params
 
@@ -211,13 +212,21 @@ async def collect_result_stream(
             message=ChatMessage(role="assistant", content="".join(chunks)),
             finish_reason=finish_reason,
         )
+        content = []
         if logprob_infos[index] != []:
-            choice.logprobs={
-                "token_logprobs": [float(logprob_info[0][1]) for logprob_info in logprob_infos[index]],
-                "tokens": [str(logprob_info[0][0]) for logprob_info in logprob_infos[index]],
-                "offset": list(accumulate([len(str(logprob_info[0][0])) for logprob_info in logprob_infos[index]])),
-                "top_logprobs": [logprob_info[1] for logprob_info in logprob_infos[index]]
-            }
+            for logprob_info in logprob_infos[index]:
+                content.append({
+                    "token": str(logprob_info[0][0]),
+                    "logprob": float(logprob_info[0][1]),
+                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    "bytes": None,
+                    "top_logprobs": [{
+                        "token": top_logprob[0],
+                        "logprob": top_logprob[1],
+                        "bytes": None,
+                    } for top_logprob in logprob_info[1]],
+                })
+        choice.logprobs.content = content
         choices.append(choice)
 
     usage = UsageInfo(

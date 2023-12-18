@@ -52,13 +52,14 @@ def create_engine(
         ))
     return engine
 
-def create_request(idx, prompt, temp, max_tokens, stop, ignore_eos, logprobs):
+def create_request(idx, prompt, temp, max_tokens, stop, ignore_eos, top_logprobs):
     return Request(
         request_id = str(idx),
         messages = [ChatMessage(role="user", content=prompt)],
         sampling_params = SamplingParams(
                             temperature=0.0,
-                            logprobs=logprobs
+                            logprobs=True,
+                            top_logprobs=top_logprobs
         ), 
         stopping_criteria = StoppingCriteria(
             max_tokens=max_tokens,
@@ -226,7 +227,7 @@ def test_logprobs(
     max_num_sequences=4,
     max_input_len=512,
     num_requests=5,
-    logprobs=3,
+    top_logprobs=3,
 ):
     prompt = "hi"
     engine = create_engine(
@@ -236,7 +237,7 @@ def test_logprobs(
         max_input_len,
     )
     s = 113
-    requests = [create_request(idx=str(n-s), prompt=prompt, temp=0, max_tokens=n, stop=None, ignore_eos=True, logprobs=logprobs) for n in range(s, s+num_requests)]
+    requests = [create_request(idx=str(n-s), prompt=prompt, temp=0, max_tokens=n, stop=None, ignore_eos=True, top_logprobs=top_logprobs) for n in range(s, s+num_requests)]
     engine.add(requests)
 
     generated = ["" for _ in range(num_requests)]
@@ -247,7 +248,7 @@ def test_logprobs(
             assert len(res.sequences) == 1
             seq = res.sequences[0]
 
-            assert seq.finish_reason is not None or len(list(seq.logprob_info[1])) == logprobs
+            assert seq.finish_reason is not None or len(list(seq.logprobs.content[0]["top_logprobs"])) == top_logprobs
 
             if seq.is_finished:
                 assert seq.num_generated_tokens == requests[int(res.request_id)].stopping_criteria.max_tokens

@@ -39,9 +39,13 @@ class SamplingParams:
             to consider. Must be in (0, 1]. Set to 1 to consider all tokens.
         top_k: Integer that controls the number of top tokens to consider. Set
             to -1 to consider all tokens.
-        logprobs: Optional[Integer] that determines number of log probabilities
-            to return per sampled tokens, default to None meaning disabled,
-            otherwise minimum 0, maximum 5.
+        logprobs: Optional[bool] Whether to return log probabilities of the output
+            tokens or not. If true, returns the log probabilities of each output
+            token returned in the content of message.
+        top_logprobs: Optional[Integer] An integer between 0 and 5 specifying
+            the number of most likely tokens to return at each token position,
+            each with an associated log probability. logprobs must be set to
+            true if this parameter is used.
     """
 
     presence_penalty: float = 0.0
@@ -49,7 +53,8 @@ class SamplingParams:
     temperature: float = 1.0
     top_p: float = 1.0
     top_k: int = -1
-    logprobs: Optional[int] = None
+    logprobs: Optional[bool] = False
+    top_logprobs: Optional[int] = None
 
     def __post_init__(self):
         self._verify_args()
@@ -77,10 +82,11 @@ class SamplingParams:
             raise ValueError(
                 f"top_k must be -1 (disable), or at least 1, " f"got {self.top_k}."
             )
-        if self.logprobs is not None and (self.logprobs < 0 or self.logprobs > TOP_LOGPROBS_NUMBER):
-            raise ValueError(
-                f"logprobs must be between 0 and {TOP_LOGPROBS_NUMBER}, got {self.logprobs}."
-            )
+        if self.logprobs is not None and self.logprobs:
+            if (self.top_logprobs < 0 or self.top_logprobs > TOP_LOGPROBS_NUMBER):
+                raise ValueError(
+                    f"top_logprobs must be between 0 and {TOP_LOGPROBS_NUMBER}, got {self.top_logprobs}."
+                )
 
     def _verify_greedy_sampling(self) -> None:
         if self.top_p < 1.0 - _SAMPLING_EPS:

@@ -70,13 +70,18 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: Optional[Dict[str, float]] = None
     user: Optional[str] = None
     ignore_eos: Optional[bool] = False
-    logprobs: Optional[int] = None
+    logprobs: Optional[bool] = False
+    top_logprobs: Optional[int] = None
+
+
+class Logprobs(BaseModel):
+    content: Optional[List[Dict]]
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    logprobs: Optional[Dict[str, Union[List, Dict]]]
+    logprobs: Optional[Logprobs]
     finish_reason: Optional[Literal["stop", "length", "cancelled"]] = None
 
 
