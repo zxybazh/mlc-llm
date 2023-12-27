@@ -82,7 +82,7 @@ class Logprobs(BaseModel):
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    logprobs: Optional[Logprobs]
+    logprobs: Optional[Logprobs] = None
     finish_reason: Optional[Literal["stop", "length", "cancelled"]] = None
 
 

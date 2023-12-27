@@ -20,6 +20,7 @@ from ..api.protocol import (
     ChatMessage,
     DeltaMessage,
     ErrorResponse,
+    Logprobs,
     UsageInfo,
 )
 from ..engine import (
@@ -237,11 +238,6 @@ async def collect_result_stream(
     
     choices = []
     for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons)):
-        choice = ChatCompletionResponseChoice(
-            index=index,
-            message=ChatMessage(role="assistant", content="".join(chunks)),
-            finish_reason=finish_reason,
-        )
         content = []
         if logprob_infos[index] != []:
             for logprob_info in logprob_infos[index]:
@@ -251,11 +247,17 @@ async def collect_result_stream(
                     # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
                     "bytes": None,
                     "top_logprobs": [{
-                        "token": top_logprob[0],
-                        "logprob": top_logprob[1],
+                        "token": str(top_logprob[0]),
+                        "logprob": float(top_logprob[1]),
                         "bytes": None,
                     } for top_logprob in logprob_info[1]],
                 })
+        choice = ChatCompletionResponseChoice(
+            index=index,
+            message=ChatMessage(role="assistant", content="".join(chunks)),
+            finish_reason=finish_reason,
+            logprobs=Logprobs(content=content),
+        )
         choice.logprobs.content = content
         choices.append(choice)
 
