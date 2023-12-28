@@ -19,6 +19,7 @@ from .base import (
     SequenceId,
     GenerationSequence,
 )
+
 from .metrics import PrometheusMetrics
 from .metrics_labels import *
 from .model_module import (

@@ -261,7 +261,6 @@ async def collect_result_stream(
             finish_reason=finish_reason,
             logprobs=Logprobs(content=content),
         )
-        choice.logprobs.content = content
         choices.append(choice)
 
     usage = UsageInfo(
