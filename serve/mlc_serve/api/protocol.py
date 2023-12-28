@@ -75,8 +75,30 @@ class ChatCompletionRequest(BaseModel):
     top_logprobs: Optional[int] = None
 
 
+class TopLogprobs(BaseModel):
+    """An OpenAI API compatible schema for logprobs output."""
+
+    token: str
+    logprob: int
+    bytes: Optional[List] = None
+
+
+class LogprobsContent(BaseModel):
+    """An OpenAI API compatible schema for logprobs output."""
+
+    token: str
+    logprob: int
+    bytes: Optional[List] = None
+    top_logprobs: List[TopLogprobs]
+
+
 class Logprobs(BaseModel):
-    content: Optional[List[Dict]]
+    """
+    An OpenAI API compatible schema for logprobs output.
+    See details in https://platform.openai.com/docs/api-reference/chat/object#chat-create-logprobs
+    """
+
+    content: Optional[List[LogprobsContent]]
 
 
 class ChatCompletionResponseChoice(BaseModel):
