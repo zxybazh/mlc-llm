@@ -10,6 +10,8 @@ import inspect
 from .sampling_params import SamplingParams, SamplingType
 
 RequestId = str
+LOGPROBS_TYPE = Tuple[Tuple, List[Tuple]]
+# ((token, logprob), [(top1_token, top1_logprob), ...])
 
 
 # TODO(@sunggg): consider transition to something like Pydantic
@@ -161,7 +163,7 @@ class SequenceOutput:
     finish_reason: Optional[FinishReason] = None
     # Number of generated tokens so far
     num_generated_tokens: int = 0
-    logprob_info: Optional[Tuple[Tuple, List[Tuple]]] = None
+    logprob_info: Optional[LOGPROBS_TYPE] = None
 
     @property
     def is_finished(self) -> bool:

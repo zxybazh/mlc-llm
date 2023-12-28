@@ -16,5 +16,6 @@ from .base import (
     RequestState,
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
+    LOGPROBS_TYPE,
 )
 from .sampling_params import SamplingParams, SamplingType, TOP_LOGPROBS_NUMBER

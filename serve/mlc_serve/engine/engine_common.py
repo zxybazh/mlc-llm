@@ -16,6 +16,7 @@ from .base import (
     GenerationSequence,
     SequenceId,
     StoppingCriteria,
+    LOGPROBS_TYPE,
 )
 from .model_module import (
     DecodeRequest,
@@ -131,14 +132,15 @@ def detokenize_incrementally(
 
     return delta
 
-def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Tuple[Tuple, List[Tuple]]) -> Tuple[Tuple, Dict[str, float]]:
+
+def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Optional[LOGPROBS_TYPE]) -> Optional[LOGPROBS_TYPE]:
     """Detokenize logprob information"""
     if logprob_info is None:
         return None
     (res, res_logprob), top_tokens = logprob_info
     top_tokens = list(top_tokens)
     count: Dict[str, int] = {}
-    logprob_dict = {}
+    top_logprobs: List[Tuple] = []
     # dedup duplicates
     # Todo: Make sure decode can generate different tokens
     for top_token, _ in top_tokens:
@@ -150,10 +152,10 @@ def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Tuple[Tuple, List[Tu
     for top_token, top_logprob in top_tokens:
         detokenized = tokenizer.decode(top_token)
         if count[detokenized] == 1:
-            logprob_dict[detokenized] = float(top_logprob)
+            top_logprobs.append((detokenized, float(top_logprob)))
         else:
-            logprob_dict[f"{detokenized}_{top_token}"] = float(top_logprob)
-    return (str(tokenizer.decode(res)), res_logprob), logprob_dict
+            top_logprobs.append((f"{detokenized}_{top_token}", float(top_logprob)))
+    return (str(tokenizer.decode(res)), res_logprob), top_logprobs
 
 
 def check_stopping_sequences(stopping_criteria, output_text, delta, is_ended):

@@ -9,7 +9,7 @@ from typing import Annotated, AsyncIterator, List
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# TODO(amalyshe): hadnle random_seed
+# TODO(amalyshe): handle random_seed
 # from .base import set_global_random_seed
 from ..api.protocol import (
     ChatCompletionRequest,
@@ -217,7 +217,7 @@ async def collect_result_stream(
     finish_reasons = [None] * num_sequences
     num_prompt_tokens = 0
     num_generated_tokens = [0 for _ in range(num_sequences)]
-    logprob_infos = [[] for _ in range(num_sequences)]
+    logprob_infos = [[] for _ in range(num_sequences)] # type: ignore
     async for res in result_generator:
         # TODO: verify that the request cancellation happens after this returns
         if res.error:
@@ -244,12 +244,13 @@ async def collect_result_stream(
         if logprob_infos[index] != []:
             for logprob_info in logprob_infos[index]:
                 top_logprobs = [TopLogprobs(
-                    token=token,
+                    token=str(token),
                     logprob=float(logprob),
+                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
-                ) for token, logprob in logprob_info[1].items()]
+                ) for token, logprob in logprob_info[1]]
                 content.append(LogprobsContent(
-                    token=logprob_info[0][0],
+                    token=str(logprob_info[0][0]),
                     logprob=float(logprob_info[0][1]),
                     # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,

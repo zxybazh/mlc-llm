@@ -13,6 +13,7 @@ import numpy as np
 
 from .base import (
     FinishReason,
+    LOGPROBS_TYPE,
     RequestId,
     RequestState,
     ValidationError,
@@ -66,7 +67,7 @@ class SequenceGenerationOutput:
     new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
-    logprob_info: Optional[Tuple[Tuple, List[Tuple]]] = None
+    logprob_info: Optional[LOGPROBS_TYPE] = None
 
 
 @dataclass

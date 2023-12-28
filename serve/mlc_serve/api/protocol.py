@@ -125,7 +125,7 @@ class DeltaMessage(BaseModel):
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
-    logprob_info: Optional[Tuple[Tuple, List[Tuple]]]
+    logprobs: Optional[Logprobs] = None
     finish_reason: Optional[Literal["stop", "length"]] = None
 
 

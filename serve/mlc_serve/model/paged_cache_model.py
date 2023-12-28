@@ -20,6 +20,7 @@ from ..engine import (
     MLCServeEngineConfig,
     SamplingParams,
     TOP_LOGPROBS_NUMBER,
+    LOGPROBS_TYPE,
     SequenceId,
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
@@ -28,7 +29,6 @@ from ..engine.model_module import (
     DecodeRequest,
     PrefillRequest,
     TextGenerationResult,
-    LOGPROBS_TYPE
 )
 from ..engine.model_module import ModelModule
 
@@ -63,7 +63,7 @@ def sample(
     sampling_params: List[SamplingParams],
     vocab_size: int,
     check_safety=False,
-) -> Optional[Tuple[np.ndarray, Optional[LOGPROBS_TYPE]]]:
+) -> Optional[Tuple[np.ndarray, Optional[Tuple[Tuple, Tuple]]]]:
     def _is_safe_to_sample(prob_like):
         return (
             torch.sum(torch.isnan(prob_like) | torch.isinf(prob_like) | (prob_like < 0))
@@ -157,7 +157,7 @@ def sample(
     res_random_logprobs = torch.gather(logprobs, dim=-1, index=torch.tensor(res_random, dtype=torch.int64, device=logits.device)).cpu().numpy()
 
     if logits_random.shape[0] == num_seq:
-        return res_random, (res_random_logprobs, (top_random, top_random_logprob))
+        return res_random, ((res_random, res_random_logprobs), (top_random, top_random_logprob))
 
     res = np.empty((num_seq,), dtype=np.int32)
     res_logprobs = np.empty((num_seq,), dtype=np.float32)
@@ -229,10 +229,10 @@ def get_tvm_model(config, dev):
 
 
 def fetch_logprobs(
-        logprob_info: LOGPROBS_TYPE,
+        logprob_info: Optional[Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]],
         index: int,
         sampling_param: SamplingParams,
-    ) -> Optional[Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]]:
+    ) -> Optional[LOGPROBS_TYPE]:  # np.ndarray inside
     """Fetch the logprob information with index"""
     if (
         sampling_param.logprobs is None or
@@ -242,10 +242,10 @@ def fetch_logprobs(
         return None
     (res, res_logprobs), (top, top_logprobs) = logprob_info
     return (res[index],res_logprobs[index]), \
-        zip(
+        list(zip(
             top[index][:sampling_param.top_logprobs],
             top_logprobs[index][:sampling_param.top_logprobs]
-        )
+        ))
 
 
 def _prepare_inputs(
