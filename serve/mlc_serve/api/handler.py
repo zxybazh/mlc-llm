@@ -9,7 +9,7 @@ from typing import Annotated, AsyncIterator, List
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# TODO(amalyshe): hadnle random_seed
+# TODO(amalyshe): handle random_seed
 # from .base import set_global_random_seed
 from ..api.protocol import (
     ChatCompletionRequest,
@@ -20,6 +20,9 @@ from ..api.protocol import (
     ChatMessage,
     DeltaMessage,
     ErrorResponse,
+    Logprobs,
+    LogprobsContent,
+    TopLogprobs,
     UsageInfo,
 )
 from ..engine import (
@@ -55,10 +58,14 @@ def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
         sampling_params.presence_penalty = request.presence_penalty
     if request.frequency_penalty is not None:
         sampling_params.frequency_penalty = request.frequency_penalty
+    if request.repetition_penalty is not None:
+        sampling_params.repetition_penalty = request.repetition_penalty
     if request.temperature is not None:
         sampling_params.temperature = request.temperature
     if request.top_p is not None:
         sampling_params.top_p = request.top_p
+    if request.logit_bias is not None:
+        sampling_params.logit_bias = request.logit_bias
     if request.logprobs is not None:
         sampling_params.top_logprobs = request.top_logprobs
         sampling_params.logprobs = request.logprobs
@@ -210,7 +217,7 @@ async def collect_result_stream(
     finish_reasons = [None] * num_sequences
     num_prompt_tokens = 0
     num_generated_tokens = [0 for _ in range(num_sequences)]
-    logprob_infos = [[] for _ in range(num_sequences)]
+    logprob_infos = [[] for _ in range(num_sequences)] # type: ignore
     async for res in result_generator:
         # TODO: verify that the request cancellation happens after this returns
         if res.error:
@@ -223,35 +230,38 @@ async def collect_result_stream(
             if seq.index >= len(sequences):
                 raise RuntimeError(f"Unexpected sequence index: {seq.index}.")
             num_generated_tokens[seq.index] = seq.num_generated_tokens
+
+            if seq.delta:
+                sequences[seq.index].append(seq.delta)
+
             if seq.is_finished:
                 assert seq.finish_reason is not None
                 finish_reasons[seq.index] = seq.finish_reason.value  # type: ignore
-            else:
-                assert seq.delta is not None
-                sequences[seq.index].append(seq.delta)
     
     choices = []
     for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons)):
+        content = []
+        if logprob_infos[index] != []:
+            for logprob_info in logprob_infos[index]:
+                top_logprobs = [TopLogprobs(
+                    token=str(token),
+                    logprob=float(logprob),
+                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    bytes=None,
+                ) for token, logprob in logprob_info[1]]
+                content.append(LogprobsContent(
+                    token=str(logprob_info[0][0]),
+                    logprob=float(logprob_info[0][1]),
+                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    bytes=None,
+                    top_logprobs=top_logprobs,
+                ))
         choice = ChatCompletionResponseChoice(
             index=index,
             message=ChatMessage(role="assistant", content="".join(chunks)),
             finish_reason=finish_reason,
+            logprobs=Logprobs(content=content),
         )
-        content = []
-        if logprob_infos[index] != []:
-            for logprob_info in logprob_infos[index]:
-                content.append({
-                    "token": str(logprob_info[0][0]),
-                    "logprob": float(logprob_info[0][1]),
-                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
-                    "bytes": None,
-                    "top_logprobs": [{
-                        "token": top_logprob[0],
-                        "logprob": top_logprob[1],
-                        "bytes": None,
-                    } for top_logprob in logprob_info[1]],
-                })
-        choice.logprobs.content = content
         choices.append(choice)
 
     usage = UsageInfo(

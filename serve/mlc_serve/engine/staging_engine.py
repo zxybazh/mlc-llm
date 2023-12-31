@@ -6,14 +6,16 @@ import multiprocessing
 import queue
 from threading import Lock
 from collections import defaultdict
-from typing import Callable, Tuple, List
+from typing import Callable
 
 import structlog
 
 from .base import (
+    FinishReason,
     InferenceStepResult,
     Request,
     RequestId,
+    SequenceId,
     RequestOutput,
     RequestState,
     ScopedInferenceEngine,
@@ -22,12 +24,13 @@ from .base import (
 from .engine_common import (
     get_new_request_state,
     update_sequence,
+    logprob_detokenize
 )
 from .model_module import ModelModule, TokenizerModule, Tokenizer
 from .staging_engine_worker import (
     AddRequestsCommand,
     CancelRequestCommand,
-    StopRequestCommand,
+    StopSequenceCommand,
     ShutdownCommand,
     run_generation_loop_worker,
 )
@@ -36,30 +39,6 @@ from ..logging_utils import log_every
 
 LOG = structlog.stdlib.get_logger(__name__)
 
-
-def logprob_detokenize(tokenizer: Tokenizer, logprob_info: Tuple[Tuple, List[Tuple]]) -> Tuple[Tuple, List[Tuple]]:
-    """Detokenize logprob information"""
-    if logprob_info is None:
-        return None
-    (res, res_logprob), top_tokens = logprob_info
-    top_tokens = list(top_tokens)
-    count = {}
-    logprob_dict = {}
-    # dedup duplicates
-    # Todo: Make sure decode can generate different tokens
-    for top_token, _ in top_tokens:
-        detokenized = tokenizer.decode(top_token)
-        if detokenized in count:
-            count[detokenized] += 1
-        else:
-            count[detokenized] = 1
-    for top_token, top_logprob in top_tokens:
-        detokenized = tokenizer.decode(top_token)
-        if count[detokenized] == 1:
-            logprob_dict[detokenized] = float(top_logprob)
-        else:
-            logprob_dict[f"{detokenized}_{top_token}"] = float(top_logprob)
-    return (str(tokenizer.decode(res)), res_logprob), logprob_dict
 
 class StagingInferenceEngine(ScopedInferenceEngine):
     """
@@ -156,11 +135,11 @@ class StagingInferenceEngine(ScopedInferenceEngine):
             raise RuntimeError("GenerationLoopWorker process is not running")
         self.command_queue.put(CancelRequestCommand(request_id))
 
-    def stop_request(self, request_id: RequestId):
-        LOG.info("StagingInferenceEngine.stop_request", request_id=request_id)
+    def stop_sequence(self, sequence_id: SequenceId):
+        LOG.info("StagingInferenceEngine.stop_sequence", sequence_id=sequence_id)
         if not self._is_ready_to_serve():
             raise RuntimeError("GenerationLoopWorker process is not running")
-        self.command_queue.put(StopRequestCommand(request_id))
+        self.command_queue.put(StopSequenceCommand(sequence_id))
 
     def has_pending_requests(self) -> bool:
         with self.requests_lock:
@@ -203,8 +182,8 @@ class StagingInferenceEngine(ScopedInferenceEngine):
 
         if generation_output.error is not None:
             raise RuntimeError(
-                f"Error when calling GenerationLoopWorker: {generation_output.error}"
-            )
+                f"Error from GenerationLoopWorker process: {generation_output.error}"
+            ) from generation_output.error
 
         outputs = list[RequestOutput]()
 
@@ -221,52 +200,59 @@ class StagingInferenceEngine(ScopedInferenceEngine):
                 request_id = seq_output.id.request_id
                 if request_id not in self.requests:
                     LOG.warn(
-                        "Unknown request %s from GenerationLoopWorkerOutput", request_id
+                        "Unknown or already deleted request %s from GenerationLoopWorkerOutput",
+                        request_id,
                     )
                     continue
 
                 state = self.requests[request_id]
 
-                if seq_output.error is not None:
-                    outputs.append(
-                        RequestOutput(
-                            request_id,
-                            sequences=[],
-                            error=seq_output.error,
-                            num_prompt_tokens=state.prompt_len,
+                with structlog.contextvars.bound_contextvars(**state.contextvars):
+                    if seq_output.error is not None:
+                        outputs.append(
+                            RequestOutput(
+                                request_id,
+                                sequences=[],
+                                error=seq_output.error,
+                                num_prompt_tokens=state.prompt_len,
+                            )
                         )
+                        del self.requests[request_id]
+                        continue
+
+                    gen_seq = state.generation_sequences[seq_output.id.sequence_index]
+                    new_token_ids = seq_output.new_tokens
+
+                    if new_token_ids:
+                        delta = update_sequence(
+                            gen_seq,
+                            new_token_ids,
+                            state.prompt_token_ids,
+                            self.tokenizer,
+                            state.stopping_criteria,
+                        )
+                    else:
+                        delta = None
+
+                    finish_reason = seq_output.finish_reason
+
+                    if seq_output.finish_reason is not None:
+                        gen_seq.is_finished = True
+                    elif gen_seq.is_finished:
+                        # update_sequence() has detected a stop word
+                        finish_reason = FinishReason.Stop
+                        self.stop_sequence(gen_seq.seq_id)
+
+                    output = SequenceOutput(
+                        seq_output.id.sequence_index,
+                        delta,
+                        finish_reason,
+                        num_generated_tokens=len(gen_seq.generated_token_ids),
+                        logprob_info=logprob_detokenize(self.tokenizer, seq_output.logprob_info),
                     )
-                    del self.requests[request_id]
-                    continue
 
-                gen_seq = state.generation_sequences[seq_output.id.sequence_index]
-                new_token_ids = seq_output.new_tokens
-
-                delta = update_sequence(
-                    gen_seq,
-                    new_token_ids,
-                    state.prompt_token_ids,
-                    self.tokenizer,
-                    state.stopping_criteria,
-                )
-
-                # signal workers to stop generation
-                if state.is_finished:
-                    self.stop_request(state.request_id)
-
-                output = SequenceOutput(
-                    seq_output.id.sequence_index,
-                    delta,
-                    finish_reason=seq_output.finish_reason,
-                    num_generated_tokens=len(gen_seq.generated_token_ids),
-                    logprob_info=logprob_detokenize(self.tokenizer, seq_output.logprob_info),
-                )
-
-                seq_outputs[request_id].append(output)
-                prompt_len[request_id] = state.prompt_len
-
-                if seq_output.finish_reason is not None:
-                    gen_seq.is_finished = True
+                    seq_outputs[request_id].append(output)
+                    prompt_len[request_id] = state.prompt_len
 
             for request_id, out_seqs in seq_outputs.items():
                 outputs.append(

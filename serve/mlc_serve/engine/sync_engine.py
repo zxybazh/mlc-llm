@@ -18,11 +18,11 @@ from .base import (
 )
 from .engine_common import (
     should_stop_by_length,
-    should_stop_seq_by_length,
     get_new_request_state,
     get_requests_to_process,
     update_sequence,
     EngineBase,
+    logprob_detokenize
 )
 from .model_module import (
     ModelModule,
@@ -203,7 +203,8 @@ class SynchronousInferenceEngine(InferenceEngine, EngineBase):
 
             if gen_seq.is_finished:
                 finish_reason = FinishReason.Stop
-            if should_stop_seq_by_length(
+
+            if should_stop_by_length(
                 gen_seq,
                 state.prompt_len,
                 self.max_context_length,
@@ -218,7 +219,7 @@ class SynchronousInferenceEngine(InferenceEngine, EngineBase):
                     delta,
                     num_generated_tokens=len(gen_seq.generated_token_ids),
                     finish_reason=finish_reason,
-                    logprob_info=res.logprob_info,
+                    logprob_info=logprob_detokenize(self.tokenizer, res.logprob_info),
                 )
             )
 

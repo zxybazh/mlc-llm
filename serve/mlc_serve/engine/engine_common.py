@@ -3,7 +3,7 @@ Common utilites for engine classes.
 """
 
 import time
-from typing import Tuple, Deque, Dict, Optional, Union, Callable
+from typing import Tuple, Deque, Dict, Optional, Union, Callable, List
 from collections import deque
 from threading import Condition, Lock
 
@@ -16,6 +16,7 @@ from .base import (
     GenerationSequence,
     SequenceId,
     StoppingCriteria,
+    LOGPROBS_TYPE,
 )
 from .model_module import (
     DecodeRequest,
@@ -64,6 +65,7 @@ def get_new_request_state(
         debug_options=request.debug_options,
         validation_err=validation_err,
         arrival_timestamp=time.time(),
+        contextvars=request.contextvars,
     )
 
 
@@ -131,6 +133,31 @@ def detokenize_incrementally(
     return delta
 
 
+def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Optional[LOGPROBS_TYPE]) -> Optional[LOGPROBS_TYPE]:
+    """Detokenize logprob information"""
+    if logprob_info is None:
+        return None
+    (res, res_logprob), top_tokens = logprob_info
+    top_tokens = list(top_tokens)
+    count: Dict[str, int] = {}
+    top_logprobs: List[Tuple] = []
+    # dedup duplicates
+    # Todo: Make sure decode can generate different tokens
+    for top_token, _ in top_tokens:
+        detokenized = tokenizer.decode(top_token)
+        if detokenized in count:
+            count[detokenized] += 1
+        else:
+            count[detokenized] = 1
+    for top_token, top_logprob in top_tokens:
+        detokenized = tokenizer.decode(top_token)
+        if count[detokenized] == 1:
+            top_logprobs.append((detokenized, float(top_logprob)))
+        else:
+            top_logprobs.append((f"{detokenized}_{top_token}", float(top_logprob)))
+    return (str(tokenizer.decode(res)), res_logprob), top_logprobs
+
+
 def check_stopping_sequences(stopping_criteria, output_text, delta, is_ended):
     if stopping_criteria.stop_sequences:
         for t in stopping_criteria.stop_sequences:
@@ -188,9 +215,14 @@ def get_requests_to_process(
         for state in current_states:
             if state.generation_sequences[0].next_start_position == 0:
                 requests.append(
+                    # generated_token_ids is added for the case where the request is
+                    # recovering from cache eviction.
+                    # TODO(masahi): This needs an update when we support evicting
+                    # a parallel-sampling request.
                     PrefillRequest(
                         request_id=state.request_id,
-                        token_ids=state.prompt_token_ids,
+                        token_ids=state.prompt_token_ids
+                        + state.generation_sequences[0].generated_token_ids,
                         num_sequence=state.num_sequences,
                         sampling_params=state.sampling_params,
                     )
@@ -229,7 +261,7 @@ def get_requests_to_process(
     return requests, is_prompt_batch, token_counts
 
 
-def should_stop_seq_by_length(
+def should_stop_by_length(
     gen_seq: GenerationSequence,
     prompt_len: int,
     max_context_length: int,
@@ -250,24 +282,6 @@ def should_stop_seq_by_length(
         return True
 
     return False
-
-
-def should_stop_by_length(state: RequestState, max_context_length: int) -> bool:
-    # If all sequences have already finished, return False
-    if state.is_finished:
-        return False
-
-    for gen_seq in state.generation_sequences:
-        # If at least one of unfinished sequences shouldn't stop, the request shouldn't stop as well.
-        if not gen_seq.is_finished and not should_stop_seq_by_length(
-            gen_seq,
-            state.prompt_len,
-            max_context_length,
-            state.stopping_criteria.max_tokens,
-        ):
-            return False
-
-    return True
 
 
 class EngineBase:
@@ -367,6 +381,7 @@ class EngineBase:
                 continue
 
             self.remove_request_from_batch(request_to_remove.request_id)
+            request_to_remove.generation_sequences[0].next_start_position = 0
             self.queue.appendleft(request_to_remove)
 
             LOG.debug(

@@ -67,21 +67,44 @@ class ChatCompletionRequest(BaseModel):
     stream: bool = False
     presence_penalty: float = 0.0
     frequency_penalty: float = 0.0
-    logit_bias: Optional[Dict[str, float]] = None
+    repetition_penalty: float = 1.0
+    logit_bias: Optional[Dict[int, float]] = None
     user: Optional[str] = None
     ignore_eos: Optional[bool] = False
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
 
 
+class TopLogprobs(BaseModel):
+    """An OpenAI API compatible schema for logprobs output."""
+
+    token: str
+    logprob: int
+    bytes: Optional[List] = None
+
+
+class LogprobsContent(BaseModel):
+    """An OpenAI API compatible schema for logprobs output."""
+
+    token: str
+    logprob: int
+    bytes: Optional[List] = None
+    top_logprobs: List[TopLogprobs]
+
+
 class Logprobs(BaseModel):
-    content: Optional[List[Dict]]
+    """
+    An OpenAI API compatible schema for logprobs output.
+    See details in https://platform.openai.com/docs/api-reference/chat/object#chat-create-logprobs
+    """
+
+    content: Optional[List[LogprobsContent]]
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    logprobs: Optional[Logprobs]
+    logprobs: Optional[Logprobs] = None
     finish_reason: Optional[Literal["stop", "length", "cancelled"]] = None
 
 
@@ -102,7 +125,7 @@ class DeltaMessage(BaseModel):
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
-    logprob_info: Optional[Tuple[Tuple, List[Tuple]]]
+    logprobs: Optional[Logprobs] = None
     finish_reason: Optional[Literal["stop", "length"]] = None
 
 

@@ -12,8 +12,6 @@ import tvm
 from tvm import relax
 from tvm.runtime import disco as di
 
-from mlc_llm import utils
-
 from .base import get_model_artifact_config
 from .paged_cache_manager import KVCache, CacheManager
 from .tokenizer import HfTokenizerModule, ConversationTemplate, Tokenizer
@@ -22,6 +20,7 @@ from ..engine import (
     MLCServeEngineConfig,
     SamplingParams,
     TOP_LOGPROBS_NUMBER,
+    LOGPROBS_TYPE,
     SequenceId,
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
@@ -30,7 +29,6 @@ from ..engine.model_module import (
     DecodeRequest,
     PrefillRequest,
     TextGenerationResult,
-    LOGPROBS_TYPE
 )
 from ..engine.model_module import ModelModule
 
@@ -65,7 +63,7 @@ def sample(
     sampling_params: List[SamplingParams],
     vocab_size: int,
     check_safety=False,
-) -> Optional[Tuple[np.ndarray, Optional[LOGPROBS_TYPE]]]:
+) -> Optional[Tuple[np.ndarray, Optional[Tuple[Tuple, Tuple]]]]:
     def _is_safe_to_sample(prob_like):
         return (
             torch.sum(torch.isnan(prob_like) | torch.isinf(prob_like) | (prob_like < 0))
@@ -109,6 +107,7 @@ def sample(
 
     for i in range(num_seq):
         param = sampling_params[i]
+        freq = param.appeared_tokens_freq
 
         if param.sampling_type == SamplingType.RANDOM:
             temperatures.append(param.temperature)
@@ -118,6 +117,21 @@ def sample(
             divide_by_temperature |= temperatures[-1] != 1.0
             do_top_p |= top_ps[-1] < 1.0
             do_top_k |= top_ks[-1] != vocab_size
+
+            # TODO(vvchernov): need to strictly define order of using penalties and logit bias or
+            # prohibit simultaneous using of them. At the latter case it can be LogitProcessor
+            if (not param.presence_penalty == 0.0 or not param.frequency_penalty == 0) and bool(freq):
+                index = torch.from_numpy(np.array(list(freq.keys()))).to(device=logits.device)
+                src = torch.from_numpy(np.array(list(freq.values()))).type_as(logits).to(device=logits.device)
+                logits[i][index] -= src * param.frequency_penalty + param.presence_penalty
+
+            if not param.repetition_penalty == 1.0 and bool(freq):
+                index = torch.from_numpy(np.array(list(freq.keys()))).to(device=logits.device)
+                logits[i][index] /= param.repetition_penalty
+
+            if param.logit_bias:
+                logits[i][param.logit_bias_index] += torch.Tensor(param.logit_bias_value).type_as(logits).to(device=logits.device)
+            
 
     logits_random = logits[mask_random]
 
@@ -143,7 +157,7 @@ def sample(
     res_random_logprobs = torch.gather(logprobs, dim=-1, index=torch.tensor(res_random, dtype=torch.int64, device=logits.device)).cpu().numpy()
 
     if logits_random.shape[0] == num_seq:
-        return res_random, (res_random_logprobs, (top_random, top_random_logprob))
+        return res_random, ((res_random, res_random_logprobs), (top_random, top_random_logprob))
 
     res = np.empty((num_seq,), dtype=np.int32)
     res_logprobs = np.empty((num_seq,), dtype=np.float32)
@@ -202,17 +216,23 @@ def get_tvm_model(config, dev):
     if config.num_shards == 1:
         ex = tvm.runtime.load_module(lib_path)
         vm = relax.VirtualMachine(ex, dev)
-        params = utils.load_params(config.model_artifact_path, dev)
+
+        from tvm.contrib import tvmjs  # pylint: disable=import-outside-toplevel
+        _params, _meta = tvmjs.load_ndarray_cache(f"{config.model_artifact_path}/params", dev)
+        params = []
+        for i in range(_meta["ParamSize"]):
+            params.append(_params[f"param_{i}"])
+
         return vm.module, params, None
 
     return load_disco_module(config.model_artifact_path, lib_path, config.num_shards)
 
 
 def fetch_logprobs(
-        logprob_info: LOGPROBS_TYPE,
+        logprob_info: Optional[Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]],
         index: int,
         sampling_param: SamplingParams,
-    ) -> Optional[Tuple[np.ndarray, List[Tuple[np.ndarray, np.ndarray]]]]:
+    ) -> Optional[LOGPROBS_TYPE]:  # np.ndarray inside
     """Fetch the logprob information with index"""
     if (
         sampling_param.logprobs is None or
@@ -222,10 +242,10 @@ def fetch_logprobs(
         return None
     (res, res_logprobs), (top, top_logprobs) = logprob_info
     return (res[index],res_logprobs[index]), \
-        zip(
+        list(zip(
             top[index][:sampling_param.top_logprobs],
             top_logprobs[index][:sampling_param.top_logprobs]
-        )
+        ))
 
 
 def _prepare_inputs(
@@ -510,11 +530,13 @@ class Model:
         try:
             next_tokens, logprob_info = sample(logits, sampling_params, self.vocab_size)
             assert next_tokens is not None
-
             outputs = []
             for i, (sequence_id, new_token) in enumerate(
                 zip(sequence_ids, next_tokens)
             ):
+                if not new_token in requests[i].sampling_params.appeared_tokens_freq:
+                    requests[i].sampling_params.appeared_tokens_freq[new_token] = 0
+                requests[i].sampling_params.appeared_tokens_freq[new_token] += 1
                 if sequence_id.sequence_index == PROMPT_SEQEUNCE_INDEX:
                     for seq_id in range(num_sequences[i]):
                         outputs.append(
@@ -531,7 +553,7 @@ class Model:
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
-                            logprob_info=fetch_logprobs(logprob_info, index, sampling_params[index]),
+                            logprob_info=fetch_logprobs(logprob_info, i, sampling_params[i]),
                         )
                     )
 
@@ -555,6 +577,10 @@ class Model:
                 )
 
                 if maybe_new_token is not None:
+                    new_token = maybe_new_token[0]
+                    if not new_token in requests[i].sampling_params.appeared_tokens_freq:
+                        requests[i].sampling_params.appeared_tokens_freq[new_token] = 0
+                    requests[i].sampling_params.appeared_tokens_freq[new_token] += 1
                     if sequence_id.sequence_index == PROMPT_SEQEUNCE_INDEX:
                         for seq_id in range(num_sequences[i]):
                             outputs.append(
@@ -562,7 +588,7 @@ class Model:
                                     sequence_id=SequenceId(
                                         sequence_id.request_id, seq_id
                                     ),
-                                    generated_tokens=[maybe_new_token[0]],  # type: ignore
+                                    generated_tokens=[new_token],  # type: ignore
                                     error=None,
                                     logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                                 )
@@ -571,7 +597,7 @@ class Model:
                         outputs.append(
                             TextGenerationResult(
                                 sequence_id=sequence_id,
-                                generated_tokens=[maybe_new_token[0]],  # type: ignore
+                                generated_tokens=[new_token],  # type: ignore
                                 error=None,
                                 logprob_info=fetch_logprobs(logprob_info, i, sampling_param)
                             )

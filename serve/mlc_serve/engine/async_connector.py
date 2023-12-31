@@ -1,7 +1,6 @@
 import asyncio
 import structlog
-from typing import AsyncIterator, Any, Dict
-import logging
+from typing import AsyncIterator, Dict
 
 from .base import (
     InferenceEngine,
@@ -12,16 +11,11 @@ from .base import (
     ScopedInferenceEngine,
 )
 
+from .error import EngineException, TextGenerationError
+
 LOG = structlog.stdlib.get_logger(__name__)
 
 ResultQueue = asyncio.Queue[RequestOutput]
-
-
-class TextGenerationError(Exception):
-    def __init__(self, error: Any) -> None:
-        self.error = error
-        super().__init__(error)
-
 
 class AsyncEngineConnector:
     def __init__(self, engine: InferenceEngine, engine_wait_timeout=1):
@@ -46,7 +40,7 @@ class AsyncEngineConnector:
         if isinstance(self.engine, ScopedInferenceEngine):
             await asyncio.to_thread(self.engine.start)
 
-        def inference_loop():
+        def inference_loop() -> None:
             while True:
                 self.engine.wait_for_request(timeout_seconds=self.engine_wait_timeout)
                 if should_stop_inference:
@@ -64,7 +58,7 @@ class AsyncEngineConnector:
                 nonlocal should_stop_inference
                 should_stop_inference = True
             except Exception as e:
-                LOG.exception("Error in inference loop")
+                LOG.exception("Error occurred while running the inference loop.")
                 self.engine_loop_exception = e
                 raise
             finally:
@@ -89,8 +83,11 @@ class AsyncEngineConnector:
                 if output.is_finished:
                     return
         except asyncio.CancelledError:
-            await asyncio.to_thread(self.engine.cancel, request.request_id)
+            LOG.info("AsyncEngineConnector.generate iterator cancelled.", request_id=request.request_id)
+            await asyncio.shield(asyncio.to_thread(self.engine.cancel, request.request_id))
+            LOG.info("AsyncEngineConnector.generate request sucessfully cancelled.", request_id=request.request_id)
         finally:
+            LOG.info("AsyncEngineConnector.generate removing request from result queue.", request_id=request.request_id)
             self.result_queues.pop(request.request_id, None)
 
     async def _get_queue_item_until_stopped(self, queue: ResultQueue) -> RequestOutput:
@@ -104,11 +101,9 @@ class AsyncEngineConnector:
 
         if wait_shutdown_task.done():
             if self.engine_loop_exception is not None:
-                raise RuntimeError(
-                    f"InferenceEngine raised exception: {self.engine_loop_exception}"
-                )
+                raise EngineException("raised while handling previous engine loop exception") from self.engine_loop_exception
             else:
-                raise RuntimeError("InferenceEngine stopped")
+                raise EngineException("stopped with no exception")
 
         wait_shutdown_task.cancel()
         return get_queue_task.result()
@@ -118,6 +113,7 @@ class AsyncEngineConnector:
             raise RuntimeError(
                 "Inference loop is not running. Call AsyncEngineConnector.start first."
             )
+
         if request.request_id in self.result_queues:
             raise RuntimeError(f"Duplicate request id: {request.request_id}")
 
@@ -128,7 +124,7 @@ class AsyncEngineConnector:
 
         return queue
 
-    async def _dispatch_result(self, result: InferenceStepResult):
+    async def _dispatch_result(self, result: InferenceStepResult) -> None:
         coroutines = []
         for item in result.outputs:
             request_id = item.request_id
