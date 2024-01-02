@@ -79,7 +79,7 @@ class TopLogprobs(BaseModel):
     """An OpenAI API compatible schema for logprobs output."""
 
     token: str
-    logprob: int
+    logprob: float
     bytes: Optional[List] = None
 
 
@@ -87,7 +87,7 @@ class LogprobsContent(BaseModel):
     """An OpenAI API compatible schema for logprobs output."""
 
     token: str
-    logprob: int
+    logprob: float
     bytes: Optional[List] = None
     top_logprobs: List[TopLogprobs]
 
