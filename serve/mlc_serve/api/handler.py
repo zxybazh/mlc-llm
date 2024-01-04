@@ -246,13 +246,13 @@ async def collect_result_stream(
                 top_logprobs = [TopLogprobs(
                     token=str(token),
                     logprob=float(logprob),
-                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
                 ) for token, logprob in logprob_info[1]]
                 content.append(LogprobsContent(
                     token=str(logprob_info[0][0]),
                     logprob=float(logprob_info[0][1]),
-                    # TODO(vvchernov): implement bytes bases on https://platform.openai.com/docs/api-reference/chat/object
+                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
                     top_logprobs=top_logprobs,
                 ))
