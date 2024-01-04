@@ -97,8 +97,8 @@ class AsyncEngineConnector:
             self.result_queues.pop(request.request_id, None)
 
     async def _get_queue_item_until_stopped(self, queue: ResultQueue) -> RequestOutput:
-        get_queue_task = asyncio.create_task(queue.get())
-        wait_shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        get_queue_task = asyncio.create_task(queue.get(), name="get_queue_task")
+        wait_shutdown_task = asyncio.create_task(self.shutdown_event.wait(), name="wait_shutdown_task")
 
         await asyncio.wait(
             (get_queue_task, wait_shutdown_task),
