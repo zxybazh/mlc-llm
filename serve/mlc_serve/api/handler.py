@@ -225,14 +225,16 @@ async def collect_result_stream(
         if res.num_prompt_tokens is not None:
             num_prompt_tokens = res.num_prompt_tokens
         for seq in res.sequences:
-            if seq.logprob_info:
-                logprob_infos[seq.index].append(seq.logprob_info)
             if seq.index >= len(sequences):
                 raise RuntimeError(f"Unexpected sequence index: {seq.index}.")
             num_generated_tokens[seq.index] = seq.num_generated_tokens
 
             if seq.delta:
                 sequences[seq.index].append(seq.delta)
+
+            if seq.logprob_info:
+                assert seq.delta
+                logprob_infos[seq.index].append(seq.logprob_info)
 
             if seq.is_finished:
                 assert seq.finish_reason is not None
