@@ -134,7 +134,7 @@ def detokenize_incrementally(
 
 
 def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Optional[LOGPROBS_TYPE]) -> Optional[LOGPROBS_TYPE]:
-    """Detokenize logprob information"""
+    """Detokenize top tokens in logprob information"""
     if logprob_info is None:
         return None
     (res, res_logprob), top_tokens = logprob_info
