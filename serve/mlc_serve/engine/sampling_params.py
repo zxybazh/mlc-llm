@@ -10,7 +10,7 @@ from functools import cached_property
 from typing import Dict, Optional
 
 _SAMPLING_EPS = 1e-5
-TOP_LOGPROBS_NUMBER = 5
+LOGPROB_TOP_K_MAX = 5
 
 
 class SamplingType(IntEnum):
@@ -105,9 +105,9 @@ class SamplingParams:
                         f"logit bias must be in [-100, 100], got {bias} for token {token}."
                     )
         if self.logprobs is not None and self.logprobs:
-            if (self.top_logprobs < 1 or self.top_logprobs > TOP_LOGPROBS_NUMBER):
+            if (self.top_logprobs < 1 or self.top_logprobs > LOGPROB_TOP_K_MAX):
                 raise ValueError(
-                    f"top_logprobs must be between 1 and {TOP_LOGPROBS_NUMBER}, got {self.top_logprobs}."
+                    f"top_logprobs must be between 1 and {LOGPROB_TOP_K_MAX}, got {self.top_logprobs}."
                 )
 
     def _verify_greedy_sampling(self) -> None:

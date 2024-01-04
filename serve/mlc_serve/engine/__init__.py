@@ -18,4 +18,4 @@ from .base import (
     get_prompt_sequence_id,
     LOGPROBS_TYPE,
 )
-from .sampling_params import SamplingParams, SamplingType, TOP_LOGPROBS_NUMBER
+from .sampling_params import SamplingParams, SamplingType, LOGPROB_TOP_K_MAX

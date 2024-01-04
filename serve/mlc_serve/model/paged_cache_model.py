@@ -19,7 +19,7 @@ from ..engine import (
     SamplingType,
     MLCServeEngineConfig,
     SamplingParams,
-    TOP_LOGPROBS_NUMBER,
+    LOGPROB_TOP_K_MAX,
     LOGPROBS_TYPE,
     SequenceId,
     PROMPT_SEQEUNCE_INDEX,
@@ -87,7 +87,7 @@ def sample(
         res_greedy_logprob, res_greedy = torch.max(logprobs, dim=-1)
         
         top_greedy_logprob, top_greedy = torch.topk(
-            logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+            logprobs, k=LOGPROB_TOP_K_MAX, dim=-1, largest=True, sorted=True
         )
         # Convert to numpy
         res_greedy_logprob = res_greedy_logprob.cpu().numpy()
@@ -145,7 +145,7 @@ def sample(
     probs = torch.softmax(logits_random, dim=-1)
     logprobs = torch.log_softmax(logits_greedy, dim=-1)
     top_random_logprob, top_random = torch.topk(
-        logprobs, k=TOP_LOGPROBS_NUMBER, dim=-1, largest=True, sorted=True
+        logprobs, k=LOGPROB_TOP_K_MAX, dim=-1, largest=True, sorted=True
     )
     top_random_logprob = top_random_logprob.cpu().numpy()
     top_random = top_random.cpu().numpy()
@@ -161,8 +161,8 @@ def sample(
 
     res = np.empty((num_seq,), dtype=np.int32)
     res_logprobs = np.empty((num_seq,), dtype=np.float32)
-    top = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.int32)
-    top_logprobs = np.empty((num_seq, TOP_LOGPROBS_NUMBER), dtype=np.float32)
+    top = np.empty((num_seq, LOGPROB_TOP_K_MAX), dtype=np.int32)
+    top_logprobs = np.empty((num_seq, LOGPROB_TOP_K_MAX), dtype=np.float32)
 
     res[mask_random] = res_random
     res_logprobs[mask_random] = res_random_logprobs

@@ -241,19 +241,21 @@ async def collect_result_stream(
                 finish_reasons[seq.index] = seq.finish_reason.value  # type: ignore
     
     choices = []
-    for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons)):
-        content = []
-        if logprob_infos[index] != []:
-            for logprob_info in logprob_infos[index]:
+    for index, (logprob_info_seq, chunks, finish_reason) in enumerate(zip(logprob_infos, sequences, finish_reasons)):
+        logprobs_content = []
+        if logprob_info_seq != []:
+            for logprob_info in logprob_info_seq:
+                cur_token_logprob_info = logprob_info[0]
+                top_logprobs_info = logprob_info[1]
                 top_logprobs = [TopLogprobs(
                     token=str(token),
                     logprob=float(logprob),
                     # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
-                ) for token, logprob in logprob_info[1]]
-                content.append(LogprobsContent(
-                    token=str(logprob_info[0][0]),
-                    logprob=float(logprob_info[0][1]),
+                ) for token, logprob in top_logprobs_info]
+                logprobs_content.append(LogprobsContent(
+                    token=str(cur_token_logprob_info[0]),
+                    logprob=float(cur_token_logprob_info[1]),
                     # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
                     top_logprobs=top_logprobs,
@@ -262,7 +264,7 @@ async def collect_result_stream(
             index=index,
             message=ChatMessage(role="assistant", content="".join(chunks)),
             finish_reason=finish_reason,
-            logprobs=Logprobs(content=content),
+            logprobs=Logprobs(content=logprobs_content),
         )
         choices.append(choice)
 
