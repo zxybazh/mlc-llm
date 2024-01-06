@@ -6,12 +6,21 @@ from abc import ABC, abstractmethod
 
 from typing import List, Callable, Any, Optional, Dict, Tuple
 import inspect
+import numpy as np
 
 from .sampling_params import SamplingParams, SamplingType
 
 RequestId = str
 LOGPROBS_TYPE = Tuple[Tuple, List[Tuple]]
 # ((token, logprob), [(top1_token, top1_logprob), ...])
+
+
+@dataclass
+class RawLogprobsInfo:
+    current_token: np.array
+    current_logprob: np.array
+    top_tokens: Optional[np.array]
+    top_logprobs: Optional[np.array]
 
 
 # TODO(@sunggg): consider transition to something like Pydantic
