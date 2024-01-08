@@ -78,8 +78,7 @@ class ChatCompletionRequest(BaseModel):
 class TopLogprobs(BaseModel):
     """An OpenAI API compatible schema for logprobs output."""
 
-    # token is string in OpenAI, but for unification int type is added
-    token: Union[str, int]
+    token: str
     logprob: float
     bytes: Optional[List] = None
 
@@ -87,8 +86,7 @@ class TopLogprobs(BaseModel):
 class LogprobsContent(BaseModel):
     """An OpenAI API compatible schema for logprobs output."""
 
-    # token is string in OpenAI, but for unification int type is added
-    token: Union[str, int]
+    token: str
     logprob: float
     bytes: Optional[List] = None
     top_logprobs: List[TopLogprobs]  # It can be empty

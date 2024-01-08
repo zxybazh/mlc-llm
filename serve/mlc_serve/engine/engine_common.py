@@ -10,13 +10,13 @@ from threading import Condition, Lock
 import structlog
 
 from .base import (
+    GenerationSequence,
+    RawLogprobsInfo,
     Request,
     RequestId,
     RequestState,
-    GenerationSequence,
     SequenceId,
     StoppingCriteria,
-    LOGPROBS_TYPE,
 )
 from .model_module import (
     DecodeRequest,
@@ -28,6 +28,7 @@ from .model_module import (
     Tokenizer as TokenizerP,
 )
 from ..model.base import ModelArtifactConfig
+from ..api.protocol import LogprobsContent, TopLogprobs
 
 LOG = structlog.stdlib.get_logger(__name__)
 
@@ -133,29 +134,49 @@ def detokenize_incrementally(
     return delta
 
 
-def logprob_detokenize(tokenizer: TokenizerP, logprob_info: Optional[LOGPROBS_TYPE]) -> Optional[LOGPROBS_TYPE]:
-    """Detokenize top tokens in logprob information"""
+def logprob_detokenize(
+        tokenizer: TokenizerP,
+        logprob_info: Optional[RawLogprobsInfo],
+) -> Optional[LogprobsContent]:
+    """Detokenize tokens from RawLogprobInfo and convert the latter to LogprobContent"""
     if logprob_info is None:
         return None
-    (res, res_logprob), top_tokens = logprob_info
-    top_tokens = list(top_tokens)
-    count: Dict[str, int] = {}
-    top_logprobs: List[Tuple] = []
-    # dedup duplicates
-    # Todo: Make sure decode can generate different tokens
-    for top_token, _ in top_tokens:
-        detokenized = tokenizer.decode(top_token)
-        if detokenized in count:
-            count[detokenized] += 1
-        else:
-            count[detokenized] = 1
-    for top_token, top_logprob in top_tokens:
-        detokenized = tokenizer.decode(top_token)
-        if count[detokenized] == 1:
-            top_logprobs.append((detokenized, float(top_logprob)))
-        else:
-            top_logprobs.append((f"{detokenized}_{top_token}", float(top_logprob)))
-    return (str(tokenizer.decode(res)), res_logprob), top_logprobs
+
+    top_logprobs: List[TopLogprobs] = []
+    if (
+        logprob_info.top_tokens is not None and
+        logprob_info.top_logprobs is not None
+    ):
+        top_tokens = zip(logprob_info.top_tokens[:], logprob_info.top_logprobs[:])
+        count: Dict[str, int] = {}
+        # dedup duplicates
+        # Todo: Make sure decode can generate different tokens
+        for top_token, _ in top_tokens:
+            detokenized = tokenizer.decode(top_token)
+            if detokenized in count:
+                count[detokenized] += 1
+            else:
+                count[detokenized] = 1
+        for top_token, top_logprob in top_tokens:
+            detokenized = tokenizer.decode(top_token)
+            if count[detokenized] != 1:
+                detokenized = f"{detokenized}_{top_token}"
+            top_logprobs.append(TopLogprobs(
+                token=detokenized,
+                logprob=float(top_logprob),
+                # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+                bytes=None,
+            ))
+
+    logprobs_content = LogprobsContent(
+        token=tokenizer.decode(logprob_info.current_token),
+        logprob=logprob_info,
+        # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+        bytes=None,
+        top_logprobs=top_logprobs,
+    )
+
+    return logprobs_content
 
 
 def check_stopping_sequences(stopping_criteria, output_text, delta, is_ended):

@@ -17,8 +17,8 @@ LOGPROBS_TYPE = Tuple[Tuple, List[Tuple]]
 
 @dataclass
 class RawLogprobsInfo:
-    current_token: np.array
-    current_logprob: np.array
+    current_token: int
+    current_logprob: float
     top_tokens: Optional[np.array]
     top_logprobs: Optional[np.array]
 
