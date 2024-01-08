@@ -196,7 +196,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
-                    logprob_info=seq.logprob_info[0] if seq.logprob_info else None
+                    logprob_info=Logprobs(content=[seq.logprob_info]) if seq.logprob_info else None
                 )
                 for seq in res.sequences
             ]
@@ -244,10 +244,7 @@ async def collect_result_stream(
     for index, (logprob_info_seq, chunks, finish_reason) in enumerate(zip(logprob_infos, sequences, finish_reasons)):
         logprobs = None
         if logprob_info_seq != []:
-            logprobs_content = []
-            for logprob_info in logprob_info_seq:
-                logprobs_content.append(logprob_info)
-            logprobs = Logprobs(content=logprobs_content)
+            logprobs = Logprobs(content=logprob_info_seq)
 
         choice = ChatCompletionResponseChoice(
             index=index,
