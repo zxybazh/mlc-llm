@@ -169,7 +169,7 @@ def logprob_detokenize(
             ))
 
     logprobs_content = LogprobsContent(
-        token=tokenizer.decode(logprob_info.current_token),
+        token=tokenizer.decode([logprob_info.current_token]),
         logprob=logprob_info,
         # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
         bytes=None,

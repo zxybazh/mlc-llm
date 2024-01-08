@@ -9,10 +9,9 @@ import inspect
 import numpy as np
 
 from .sampling_params import SamplingParams, SamplingType
+from ..api.protocol import LogprobsContent
 
 RequestId = str
-LOGPROBS_TYPE = Tuple[Tuple, List[Tuple]]
-# ((token, logprob), [(top1_token, top1_logprob), ...])
 
 
 @dataclass
@@ -172,7 +171,7 @@ class SequenceOutput:
     finish_reason: Optional[FinishReason] = None
     # Number of generated tokens so far
     num_generated_tokens: int = 0
-    logprob_info: Optional[LOGPROBS_TYPE] = None
+    logprob_info: Optional[LogprobsContent] = None
 
     @property
     def is_finished(self) -> bool:
