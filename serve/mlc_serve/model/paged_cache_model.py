@@ -43,8 +43,8 @@ def fetch_raw_logprob_infos(
     num_seq = logits.shape[0]
     for index in range(num_seq):
         if (
-            sampling_params[index].logprobs is None or
-            not sampling_params[index].logprobs
+            sampling_params[index].logprobs is not None and
+            sampling_params[index].logprobs
         ):
             # Logprob sampling
             logprobs = torch.log_softmax(logits[index], dim=-1)
