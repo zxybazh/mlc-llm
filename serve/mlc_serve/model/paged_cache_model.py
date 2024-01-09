@@ -178,9 +178,7 @@ def sample(
         logits_random.div_(t.unsqueeze(dim=1))
 
     if do_top_p or do_top_k:
-        # TODO(vvchernov): looks like there is misprinting. Should logits_random be returned?
-        # If no, where are logits used below?
-        logits = _apply_top_p_top_k(logits_random, top_ps, top_ks)
+        logits_random = _apply_top_p_top_k(logits_random, top_ps, top_ks)
 
     probs = torch.softmax(logits_random, dim=-1)
 
