@@ -196,7 +196,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
-                    logprob_info=seq.logprob_info[0] if seq.logprob_info else None
+                    logprob_info=Logprobs(content=[seq.logprob_info]) if seq.logprob_info else None
                 )
                 for seq in res.sequences
             ]
@@ -241,28 +241,16 @@ async def collect_result_stream(
                 finish_reasons[seq.index] = seq.finish_reason.value  # type: ignore
     
     choices = []
-    for index, (chunks, finish_reason) in enumerate(zip(sequences, finish_reasons)):
-        content = []
-        if logprob_infos[index] != []:
-            for logprob_info in logprob_infos[index]:
-                top_logprobs = [TopLogprobs(
-                    token=str(token),
-                    logprob=float(logprob),
-                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
-                    bytes=None,
-                ) for token, logprob in logprob_info[1]]
-                content.append(LogprobsContent(
-                    token=str(logprob_info[0][0]),
-                    logprob=float(logprob_info[0][1]),
-                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
-                    bytes=None,
-                    top_logprobs=top_logprobs,
-                ))
+    for index, (logprob_info_seq, chunks, finish_reason) in enumerate(zip(logprob_infos, sequences, finish_reasons)):
+        logprobs = None
+        if logprob_info_seq != []:
+            logprobs = Logprobs(content=logprob_info_seq)
+
         choice = ChatCompletionResponseChoice(
             index=index,
             message=ChatMessage(role="assistant", content="".join(chunks)),
             finish_reason=finish_reason,
-            logprobs=Logprobs(content=content),
+            logprobs=logprobs,
         )
         choices.append(choice)
 

@@ -6,8 +6,8 @@ from typing import Optional, Protocol, Union, Tuple, List
 
 from .base import (
     ChatMessage,
-    LOGPROBS_TYPE,
     MLCServeEngineConfig,
+    RawLogprobsInfo,
     RequestId,
     RequestState,
     SequenceId,
@@ -51,7 +51,7 @@ class TextGenerationResult:
     # making this a list of token ids to leave room for speculative decoding
     generated_tokens: List[int]
     error: Optional[str]
-    logprob_info: Optional[LOGPROBS_TYPE] = None
+    logprob_info: Optional[RawLogprobsInfo] = None
 
 
 class KVCache(Protocol):

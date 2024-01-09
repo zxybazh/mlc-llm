@@ -6,14 +6,13 @@ import multiprocessing
 import multiprocessing.synchronize
 from dataclasses import dataclass
 from threading import Thread, Lock
-from typing import Callable, Optional, Union, Tuple, Any, Dict, List
+from typing import Callable, Optional, Union, Any, Dict, List
 
 import structlog
-import numpy as np
 
 from .base import (
     FinishReason,
-    LOGPROBS_TYPE,
+    RawLogprobsInfo,
     RequestId,
     RequestState,
     ValidationError,
@@ -67,7 +66,7 @@ class SequenceGenerationOutput:
     new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
-    logprob_info: Optional[LOGPROBS_TYPE] = None
+    logprob_info: Optional[RawLogprobsInfo] = None
 
 
 @dataclass

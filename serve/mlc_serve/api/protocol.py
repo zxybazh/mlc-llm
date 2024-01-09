@@ -89,7 +89,7 @@ class LogprobsContent(BaseModel):
     token: str
     logprob: float
     bytes: Optional[List] = None
-    top_logprobs: List[TopLogprobs]
+    top_logprobs: List[TopLogprobs]  # It can be empty
 
 
 class Logprobs(BaseModel):
@@ -98,7 +98,7 @@ class Logprobs(BaseModel):
     See details in https://platform.openai.com/docs/api-reference/chat/object#chat-create-logprobs
     """
 
-    content: Optional[List[LogprobsContent]]
+    content: List[LogprobsContent]
 
 
 class ChatCompletionResponseChoice(BaseModel):
