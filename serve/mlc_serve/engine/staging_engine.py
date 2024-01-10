@@ -26,7 +26,7 @@ from .engine_common import (
     update_sequence,
     logprob_detokenize
 )
-from .model_module import ModelModule, TokenizerModule, Tokenizer
+from .model_module import ModelModule, TokenizerModule
 from .staging_engine_worker import (
     AddRequestsCommand,
     CancelRequestCommand,

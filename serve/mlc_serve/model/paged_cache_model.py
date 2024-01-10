@@ -35,9 +35,9 @@ LOG = structlog.stdlib.get_logger(__name__)
 
 
 def fetch_raw_logprob_infos(
-        logits,
-        res_tokens,
-        sampling_params,
+    logits,
+    res_tokens,
+    sampling_params,
 ) -> List[Optional[RawLogprobsInfo]]:
     logprob_infos: List[Optional[RawLogprobsInfo]] = []
     num_seq = logits.shape[0]
@@ -99,6 +99,14 @@ def _apply_top_p_top_k(logits, top_ps, top_ks):
     logits = torch.gather(logits_sort, dim=-1, index=torch.argsort(logits_idx, dim=-1))
     return logits
 
+def update_masked_list(input_list, mask, update):
+    j = 0
+    for i in range(len(mask)):
+        if mask[i]:
+            input_list[i] = update[j]
+            j = j + 1
+
+    return input_list
 
 def sample(
     logits: Union[tvm.nd.NDArray, torch.Tensor],
@@ -202,12 +210,12 @@ def sample(
     res[mask_random] = res_random
 
     logprob_infos: List[Optional[RawLogprobsInfo]] = [None] * num_seq
-    logprob_infos[mask_random] = logprob_infos_random
+    logprob_infos = update_masked_list(logprob_infos, mask_random, logprob_infos_random)
 
     if logits_greedy.shape[0] > 0:
         res[mask_greedy] = res_greedy
 
-        logprob_infos[mask_greedy] = logprob_infos_greedy
+        logprob_infos = update_masked_list(logprob_infos, mask_greedy, logprob_infos_greedy)
 
     return res, logprob_infos
 
@@ -603,7 +611,7 @@ class Model:
                                     ),
                                     generated_tokens=[new_token],  # type: ignore
                                     error=None,
-                                    logprob_info=logprob_infos[i]
+                                    logprob_info=logprob_infos[0]
                                 )
                             )
                     else:
@@ -612,7 +620,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[new_token],  # type: ignore
                                 error=None,
-                                logprob_info=logprob_infos[i]
+                                logprob_info=logprob_infos[0]
                             )
                         )
                 else:
@@ -625,7 +633,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
-                                    logprob_info=logprob_infos[i]
+                                    logprob_info=logprob_infos[0]
                                 )
                             )
                     else:
@@ -634,7 +642,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
-                                logprob_info=logprob_infos[i]
+                                logprob_info=logprob_infos[0]
                             )
                         )
 
