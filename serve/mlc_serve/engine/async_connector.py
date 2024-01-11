@@ -81,6 +81,7 @@ class AsyncEngineConnector:
                 # correctly inside this _get_queue...(...) awaitable object too
                 output = await self._get_queue_item_until_stopped(queue)
                 if output.error is not None:
+                    self.engine.cancel(request.request_id)
                     raise TextGenerationError(output.error)
                 yield output
                 if output.is_finished:
