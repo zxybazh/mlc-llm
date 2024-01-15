@@ -161,7 +161,9 @@ class GenerationLoopWorker(EngineBase):
                         error=err,
                     )
                 )
-                del self.sequence_map[gen_seq.seq_id]
+
+                if gen_seq.seq_id in self.sequence_map:
+                    del self.sequence_map[gen_seq.seq_id]
 
             if state.request_id in self.current_batch:
                 self.remove_request_from_batch(state.request_id)
@@ -255,6 +257,10 @@ class GenerationLoopWorker(EngineBase):
             gen_seq.next_start_position = state.prompt_len + len(
                 gen_seq.generated_token_ids
             )
+
+            if not state.is_prefilled:
+                # Successfully completed a prefill request
+                state.is_prefilled = True
 
             finish_reason = None
 

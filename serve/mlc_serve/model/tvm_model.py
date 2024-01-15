@@ -34,7 +34,7 @@ LOG = structlog.stdlib.get_logger(__name__)
 
 
 def load_disco_module(artifact_path, lib_path, num_shards):
-    sess = di.ProcessSession(num_workers=num_shards)
+    sess = di.ProcessSession(num_workers=num_shards, entrypoint="tvm.exec.disco_worker")
     devices = range(num_shards)
     sess.init_ccl("nccl", *devices)
     module = sess.load_vm_module(lib_path)
@@ -72,7 +72,10 @@ def get_tvm_model(config, dev):
         vm = relax.VirtualMachine(ex, dev)
 
         from tvm.contrib import tvmjs  # pylint: disable=import-outside-toplevel
-        _params, _meta = tvmjs.load_ndarray_cache(f"{config.model_artifact_path}/params", dev)
+
+        _params, _meta = tvmjs.load_ndarray_cache(
+            f"{config.model_artifact_path}/params", dev
+        )
         params = []
         for i in range(_meta["ParamSize"]):
             params.append(_params[f"param_{i}"])
@@ -200,7 +203,7 @@ class Model:
 
     def generate(
         self,
-        requests: Union[List[PrefillRequest], List[DecodeRequest]],
+        requests: Sequence[Union[PrefillRequest, DecodeRequest]],
         cache: KVCache,
     ) -> List[TextGenerationResult]:
         if len(requests) == 0:
@@ -370,7 +373,10 @@ class Model:
 
                 if maybe_new_token is not None:
                     new_token = maybe_new_token[0]
-                    if not new_token in requests[i].sampling_params.appeared_tokens_freq:
+                    if (
+                        not new_token
+                        in requests[i].sampling_params.appeared_tokens_freq
+                    ):
                         requests[i].sampling_params.appeared_tokens_freq[new_token] = 0
                     requests[i].sampling_params.appeared_tokens_freq[new_token] += 1
                     if sequence_id.sequence_index == PROMPT_SEQEUNCE_INDEX:

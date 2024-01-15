@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import structlog
 from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
@@ -11,6 +11,7 @@ import numpy as np
 from .sampling_params import SamplingParams, SamplingType
 from ..api.protocol import LogprobsContent
 
+LOG = structlog.stdlib.get_logger(__name__)
 RequestId = str
 
 
@@ -100,6 +101,8 @@ class DebugOptions:
     ignore_eos: bool = False
     # Override messages with a single prompt, skipping conversation template
     prompt: Optional[str] = None
+    # Overrides prompts, skipping tokenization
+    prompt_token_ids: Optional[list[int]] = None
 
 
 class FinishReason(Enum):
@@ -161,6 +164,18 @@ class Request:
             raise ValueError(
                 "best_of must be 1 when using greedy sampling." f"Got {self.best_of}."
             )
+
+        if self.debug_options.prompt_token_ids is not None:
+            LOG.warn(
+                f"`debug_options.prompt_token_ids` is provided. This will be used directly and the prompts will be ignored if provided."
+            )
+            if not isinstance(self.debug_options.prompt_token_ids, list):
+                raise ValueError("`prompt_token_ids` needs to be list.")
+        else:
+            if self.debug_options.prompt is not None:
+                LOG.warn(
+                    f"`debug_options.prompt` is provided. It will be used instead of `messages`. Conversation template will be skipped."
+                )
 
 
 @dataclass
@@ -323,6 +338,7 @@ class RequestState:
     validation_err: Optional[ValidationError] = None
     # Context variables to attach to logging.
     contextvars: Dict[str, Any] = field(default_factory=dict)
+    is_prefilled: bool = False
 
     @property
     def is_finished(self) -> bool:

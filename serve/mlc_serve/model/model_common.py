@@ -126,6 +126,7 @@ def sample(
             == 0
         )
 
+    torch.cuda.nvtx.range_push(f"sample {logits.shape}")
     logits = torch.from_dlpack(logits)
     num_seq = len(sampling_params)
 
@@ -149,6 +150,7 @@ def sample(
         res_greedy = res_greedy.cpu().numpy()
         # Case when there's only greedy sampling
         if logits_greedy.shape[0] == num_seq:
+            torch.cuda.nvtx.range_pop()
             return res_greedy, logprob_infos_greedy
 
     temperatures = []
@@ -173,17 +175,33 @@ def sample(
 
             # TODO(vvchernov): need to strictly define order of using penalties and logit bias or
             # prohibit simultaneous using of them. At the latter case it can be LogitProcessor
-            if (not param.presence_penalty == 0.0 or not param.frequency_penalty == 0) and bool(freq):
-                index = torch.from_numpy(np.array(list(freq.keys()))).to(device=logits.device)
-                src = torch.from_numpy(np.array(list(freq.values()))).type_as(logits).to(device=logits.device)
-                logits[i][index] -= src * param.frequency_penalty + param.presence_penalty
+            if (
+                not param.presence_penalty == 0.0 or not param.frequency_penalty == 0
+            ) and bool(freq):
+                index = torch.from_numpy(np.array(list(freq.keys()))).to(
+                    device=logits.device
+                )
+                src = (
+                    torch.from_numpy(np.array(list(freq.values())))
+                    .type_as(logits)
+                    .to(device=logits.device)
+                )
+                logits[i][index] -= (
+                    src * param.frequency_penalty + param.presence_penalty
+                )
 
             if not param.repetition_penalty == 1.0 and bool(freq):
-                index = torch.from_numpy(np.array(list(freq.keys()))).to(device=logits.device)
+                index = torch.from_numpy(np.array(list(freq.keys()))).to(
+                    device=logits.device
+                )
                 logits[i][index] /= param.repetition_penalty
 
             if param.logit_bias:
-                logits[i][param.logit_bias_index] += torch.Tensor(param.logit_bias_value).type_as(logits).to(device=logits.device)
+                logits[i][param.logit_bias_index] += (
+                    torch.Tensor(param.logit_bias_value)
+                    .type_as(logits)
+                    .to(device=logits.device)
+                )
 
     logits_random = logits[mask_random]
 
@@ -197,6 +215,7 @@ def sample(
     probs = torch.softmax(logits_random, dim=-1)
 
     if check_safety and not _is_safe_to_sample(probs):
+        torch.cuda.nvtx.range_pop()
         return None
 
     res_random = torch.multinomial(probs, 1, True)[:, 0]
@@ -210,6 +229,7 @@ def sample(
     res_random = res_random.cpu().numpy()
     # Case when there's only random sampling
     if logits_random.shape[0] == num_seq:
+        torch.cuda.nvtx.range_pop()
         return res_random, logprob_infos_random
 
     res = np.empty((num_seq,), dtype=np.int32)
@@ -223,6 +243,7 @@ def sample(
 
         logprob_infos = update_masked_list(logprob_infos, mask_greedy, logprob_infos_greedy)
 
+    torch.cuda.nvtx.range_pop()
     return res, logprob_infos
 
 
