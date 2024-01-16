@@ -76,6 +76,8 @@ class AsyncEngineConnector:
         try:
             queue = await self._add_request(request)
             while True:
+                # TODO(jknight): Should make sure we are catching cancellations 
+                # correctly inside this _get_queue...(...) awaitable object too
                 output = await self._get_queue_item_until_stopped(queue)
                 if output.error is not None:
                     raise TextGenerationError(output.error)
@@ -84,29 +86,37 @@ class AsyncEngineConnector:
                     return
         except asyncio.CancelledError:
             LOG.info("AsyncEngineConnector.generate iterator cancelled.", request_id=request.request_id)
-            await asyncio.shield(asyncio.to_thread(self.engine.cancel, request.request_id))
+            # Running this sync because `await` inside of cancellation events is problematic
+            self.engine.cancel(request.request_id)
             LOG.info("AsyncEngineConnector.generate request sucessfully cancelled.", request_id=request.request_id)
+            # Always re-raise CancellationErrors unless you know what you're doing.
+            raise
         finally:
             LOG.info("AsyncEngineConnector.generate removing request from result queue.", request_id=request.request_id)
             self.result_queues.pop(request.request_id, None)
 
     async def _get_queue_item_until_stopped(self, queue: ResultQueue) -> RequestOutput:
-        get_queue_task = asyncio.create_task(queue.get())
-        wait_shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        try:
+            get_queue_task = asyncio.create_task(queue.get(), name="get_queue_task")
+            wait_shutdown_task = asyncio.create_task(self.shutdown_event.wait(), name="wait_shutdown_task")
 
-        await asyncio.wait(
-            (get_queue_task, wait_shutdown_task),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+            await asyncio.wait(
+                (get_queue_task, wait_shutdown_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        if wait_shutdown_task.done():
-            if self.engine_loop_exception is not None:
-                raise EngineException("raised while handling previous engine loop exception") from self.engine_loop_exception
-            else:
-                raise EngineException("stopped with no exception")
+            if wait_shutdown_task.done():
+                if self.engine_loop_exception is not None:
+                    raise EngineException("raised while handling previous engine loop exception") from self.engine_loop_exception
+                else:
+                    raise EngineException("stopped with no exception")
 
-        wait_shutdown_task.cancel()
-        return get_queue_task.result()
+            wait_shutdown_task.cancel()
+            return get_queue_task.result()
+        except asyncio.CancelledError:
+            wait_shutdown_task.cancel()
+            get_queue_task.cancel()
+            raise
 
     async def _add_request(self, request: Request) -> ResultQueue:
         if self.engine_loop_task is None:

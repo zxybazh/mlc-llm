@@ -36,22 +36,25 @@ LOG = structlog.stdlib.get_logger(__name__)
 def get_new_request_state(
     request: Request, conversation_template: ConversationTemplate, tokenizer: TokenizerP
 ) -> RequestState:
-    if request.debug_options.prompt is not None:
-        prompt = request.debug_options.prompt
+    if request.debug_options.prompt_token_ids is not None:
+        prompt_token_ids = request.debug_options.prompt_token_ids
     else:
-        prompt = conversation_template.apply(request.messages)
+        if request.debug_options.prompt is not None:
+            prompt = request.debug_options.prompt
+        else:
+            prompt = conversation_template.apply(request.messages)
 
-    prompt_tokens = tokenizer.encode(prompt)
+        prompt_token_ids = tokenizer.encode(prompt)
 
     validation_err = None
     if request.validate_tokens is not None:
-        validation_err = request.validate_tokens(request, prompt_tokens)
+        validation_err = request.validate_tokens(request, prompt_token_ids)
 
     gen_seqs = [
         GenerationSequence(
             seq_id=SequenceId(request.request_id, i),
             generated_token_ids=[],
-            next_start_position=0,
+            next_start_position=len(prompt_token_ids),
             output_text="",
         )
         for i in range(request.num_sequences)
@@ -59,7 +62,7 @@ def get_new_request_state(
 
     return RequestState(
         request_id=request.request_id,
-        prompt_token_ids=prompt_tokens,
+        prompt_token_ids=prompt_token_ids,
         generation_sequences=gen_seqs,
         sampling_params=request.sampling_params,
         stopping_criteria=request.stopping_criteria,
@@ -225,16 +228,13 @@ def get_requests_to_process(
     requests: list[Union[PrefillRequest, DecodeRequest]] = []
     # TODO: consider having hybrid batch if the underlying attention kernel supports
     # mixing prefill and decode.
-    is_prompt_batch = any(
-        state.generation_sequences[0].next_start_position == 0
-        for state in current_states
-    )
+    is_prompt_batch = any(not state.is_prefilled for state in current_states)
 
     token_counts = 0
 
     if is_prompt_batch:
         for state in current_states:
-            if state.generation_sequences[0].next_start_position == 0:
+            if not state.is_prefilled:
                 requests.append(
                     # generated_token_ids is added for the case where the request is
                     # recovering from cache eviction.
@@ -402,7 +402,7 @@ class EngineBase:
                 continue
 
             self.remove_request_from_batch(request_to_remove.request_id)
-            request_to_remove.generation_sequences[0].next_start_position = 0
+            request_to_remove.is_prefilled = False
             self.queue.appendleft(request_to_remove)
 
             LOG.debug(
@@ -447,7 +447,7 @@ class EngineBase:
         else:
             # Evicting and recovering multi-sequence requests is not supported for now.
             assert all(
-                gen_seq.next_start_position == 0
+                gen_seq.next_start_position == state.prompt_len
                 for gen_seq in state.generation_sequences
             )
             num_tokens = state.prompt_len
