@@ -78,6 +78,7 @@ def fetch_raw_logprob_infos(
             ))
         else:
             logprob_infos.append(None)
+
     return logprob_infos
 
 
@@ -114,6 +115,15 @@ def update_masked_list(input_list, mask, update):
     return input_list
 
 
+def filter_list_by_mask(i_list, mask):
+    o_list = []
+    for i in range(len(mask)):
+        if mask[i]:
+            o_list.append(i_list[i])
+
+    return o_list
+
+
 def sample(
     logits: Union[tvm.nd.NDArray, torch.Tensor],
     sampling_params: List[SamplingParams],
@@ -144,7 +154,7 @@ def sample(
         logprob_infos_greedy = fetch_raw_logprob_infos(
             logits_greedy,
             res_greedy,
-            sampling_params[mask_greedy],
+            filter_list_by_mask(sampling_params, mask_greedy)
         )
 
         res_greedy = res_greedy.cpu().numpy()
@@ -223,7 +233,7 @@ def sample(
     logprob_infos_random = fetch_raw_logprob_infos(
         logits_random,
         res_random,
-        sampling_params[mask_random],
+        filter_list_by_mask(sampling_params, mask_random),
     )
 
     res_random = res_random.cpu().numpy()

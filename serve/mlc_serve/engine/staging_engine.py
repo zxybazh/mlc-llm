@@ -24,7 +24,7 @@ from .base import (
 from .engine_common import (
     get_new_request_state,
     update_sequence,
-    logprob_detokenize
+    logprobs_detokenize
 )
 from .model_module import ModelModule, TokenizerModule
 from .staging_engine_worker import (
@@ -252,7 +252,7 @@ class StagingInferenceEngine(ScopedInferenceEngine):
                         delta,
                         finish_reason,
                         num_generated_tokens=len(gen_seq.generated_token_ids),
-                        logprob_info=logprob_detokenize(self.tokenizer, seq_output.logprob_info),
+                        logprob_info=logprobs_detokenize(self.tokenizer, seq_output.logprob_info),
                     )
 
                     seq_outputs[request_id].append(output)

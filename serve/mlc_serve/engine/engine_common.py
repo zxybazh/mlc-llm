@@ -182,6 +182,20 @@ def logprob_detokenize(
     return logprobs_content
 
 
+def logprobs_detokenize(
+        tokenizer: TokenizerP,
+        logprobs_info: List[Optional[RawLogprobsInfo]],
+) -> Optional[List[Optional[LogprobsContent]]]:
+    res: List[Optional[LogprobsContent]] = []
+    for logprob_info in logprobs_info:
+        res.append(logprob_detokenize(tokenizer, logprob_info))
+
+    check_all = all([x is None for x in res])
+    if check_all:
+        return None
+    return res
+
+
 def check_stopping_sequences(stopping_criteria, output_text, delta, is_ended):
     if stopping_criteria.stop_sequences:
         for t in stopping_criteria.stop_sequences:

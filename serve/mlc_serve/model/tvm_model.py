@@ -339,7 +339,7 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
-                                logprob_info=logprob_infos[i],
+                                logprob_info=[logprob_infos[i]],
                             )
                         )
                 else:
@@ -348,7 +348,7 @@ class Model:
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
-                            logprob_info=logprob_infos[i],
+                            logprob_info=[logprob_infos[i]],
                         )
                     )
 
@@ -388,7 +388,7 @@ class Model:
                                     ),
                                     generated_tokens=[new_token],  # type: ignore
                                     error=None,
-                                    logprob_info=logprob_infos[0]
+                                    logprob_info=[logprob_infos[0]]
                                 )
                             )
                     else:
@@ -397,7 +397,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[new_token],  # type: ignore
                                 error=None,
-                                logprob_info=logprob_infos[0]
+                                logprob_info=[logprob_infos[0]]
                             )
                         )
                 else:
@@ -410,7 +410,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
-                                    logprob_info=logprob_infos[0]
+                                    logprob_info=[logprob_infos[0]]
                                 )
                             )
                     else:
@@ -419,7 +419,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
-                                logprob_info=logprob_infos[0]
+                                logprob_info=[logprob_infos[0]]
                             )
                         )
 

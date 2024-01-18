@@ -186,7 +186,7 @@ class SequenceOutput:
     finish_reason: Optional[FinishReason] = None
     # Number of generated tokens so far
     num_generated_tokens: int = 0
-    logprob_info: Optional[LogprobsContent] = None
+    logprob_info: Optional[List[Optional[LogprobsContent]]] = None
 
     @property
     def is_finished(self) -> bool:
