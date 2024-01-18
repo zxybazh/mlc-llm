@@ -21,8 +21,6 @@ from ..api.protocol import (
     DeltaMessage,
     ErrorResponse,
     Logprobs,
-    LogprobsContent,
-    TopLogprobs,
     UsageInfo,
 )
 from ..engine import (

@@ -2,9 +2,11 @@
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 # https://github.com/vllm-project/vllm/blob/acbed3ef40f015fcf64460e629813922fab90380/vllm/entrypoints/openai/protocol.py
 import time
-from typing import Dict, List, Literal, Optional, Union, Tuple
+from typing import Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+
+from ..openai_logprob_protocol import Logprobs
 
 
 class ErrorResponse(BaseModel):
@@ -73,32 +75,6 @@ class ChatCompletionRequest(BaseModel):
     ignore_eos: Optional[bool] = False
     logprobs: Optional[bool] = False
     top_logprobs: Optional[int] = None
-
-
-class TopLogprobs(BaseModel):
-    """An OpenAI API compatible schema for logprobs output."""
-
-    token: str
-    logprob: float
-    bytes: Optional[List] = None
-
-
-class LogprobsContent(BaseModel):
-    """An OpenAI API compatible schema for logprobs output."""
-
-    token: str
-    logprob: float
-    bytes: Optional[List] = None
-    top_logprobs: List[TopLogprobs]  # It can be empty
-
-
-class Logprobs(BaseModel):
-    """
-    An OpenAI API compatible schema for logprobs output.
-    See details in https://platform.openai.com/docs/api-reference/chat/object#chat-create-logprobs
-    """
-
-    content: List[LogprobsContent]
 
 
 class ChatCompletionResponseChoice(BaseModel):

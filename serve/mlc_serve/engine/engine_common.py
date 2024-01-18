@@ -28,7 +28,7 @@ from .model_module import (
     Tokenizer as TokenizerP,
 )
 from ..model.base import ModelArtifactConfig
-from ..api.protocol import LogprobsContent, TopLogprobs
+from ..openai_logprob_protocol import LogprobsContent, TopLogprobs
 
 LOG = structlog.stdlib.get_logger(__name__)
 

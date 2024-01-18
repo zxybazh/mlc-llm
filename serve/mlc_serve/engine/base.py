@@ -4,12 +4,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
 
-from typing import List, Callable, Any, Optional, Dict, Tuple
+from typing import List, Callable, Any, Optional, Dict
 import inspect
 import numpy as np
 
 from .sampling_params import SamplingParams, SamplingType
-from ..api.protocol import LogprobsContent
+from ..openai_logprob_protocol import LogprobsContent
 
 LOG = structlog.stdlib.get_logger(__name__)
 RequestId = str
