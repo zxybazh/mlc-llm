@@ -150,7 +150,7 @@ def logprob_detokenize(
         logprob_info.top_tokens is not None and
         logprob_info.top_logprobs is not None
     ):
-        top_tokens = zip(logprob_info.top_tokens[:], logprob_info.top_logprobs[:])
+        top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
         count: Dict[str, int] = {}
         # dedup duplicates
         # Todo: Make sure decode can generate different tokens

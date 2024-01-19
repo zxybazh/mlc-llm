@@ -66,7 +66,7 @@ def fetch_raw_logprob_infos(
                 top_logprobs, top_tokens = torch.topk(
                     logprobs, k=top_logprobs_num, dim=-1, largest=True, sorted=True
                 )
-                top_tokens=top_tokens.cpu().numpy(),
+                top_tokens=top_tokens.cpu().numpy()
                 top_logprobs=top_logprobs.cpu().numpy()
 
             # Set to raw logprob info
