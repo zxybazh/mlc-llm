@@ -194,7 +194,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
-                    logprob_info=Logprobs(content=[seq.logprob_info]) if seq.logprob_info else None
+                    logprob_info=Logprobs(content=seq.logprob_info) if seq.logprob_info else None
                 )
                 for seq in res.sequences
             ]
@@ -232,7 +232,7 @@ async def collect_result_stream(
 
             if seq.logprob_info:
                 assert seq.delta
-                logprob_infos[seq.index].append(seq.logprob_info)
+                logprob_infos[seq.index].extend(seq.logprob_info)
 
             if seq.is_finished:
                 assert seq.finish_reason is not None
