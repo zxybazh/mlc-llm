@@ -282,13 +282,6 @@ class Model:
                     slot_mapping,
                     self.params,
                 )
-
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[
-                    0
-                ]  # Ignore returned KV cache since it is updated in-place anyway.
         else:
             torch.cuda.nvtx.range_push(f"forward decode {input_shape}")
 
@@ -305,10 +298,12 @@ class Model:
                 self.params,
             )
 
-            if self.disco_session:
-                logits, _ = out.debug_get_from_remote(0)
-            else:
-                logits = out[0]
+        if self.disco_session:
+            logits, _ = out.debug_get_from_remote(0)
+        else:
+            logits = out[
+                0
+            ]  # Ignore returned KV cache since it is updated in-place anyway.
 
         torch.cuda.synchronize()
         torch.cuda.nvtx.range_pop()
@@ -330,7 +325,7 @@ class Model:
             cache.pending_copy_from_to = []
 
         try:
-            next_tokens = sample(logits, sampling_params, self.vocab_size)
+            next_tokens, logprob_infos = sample(logits, sampling_params, self.vocab_size)
             assert next_tokens is not None
             outputs = []
             for i, (sequence_id, new_token) in enumerate(
@@ -346,6 +341,7 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
+                                logprob_info=[logprob_infos[i]],
                             )
                         )
                 else:
@@ -354,6 +350,7 @@ class Model:
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
+                            logprob_info=[logprob_infos[i]],
                         )
                     )
 
@@ -369,7 +366,7 @@ class Model:
             for i, (sequence_id, logits_per_token, sampling_param) in enumerate(
                 zip(sequence_ids, torch.from_dlpack(logits), sampling_params)
             ):
-                maybe_new_token = sample(
+                maybe_new_token, logprob_infos = sample(
                     torch.unsqueeze(logits_per_token, 0),
                     [sampling_param],
                     self.vocab_size,
@@ -393,6 +390,7 @@ class Model:
                                     ),
                                     generated_tokens=[new_token],  # type: ignore
                                     error=None,
+                                    logprob_info=[logprob_infos[0]]
                                 )
                             )
                     else:
@@ -401,6 +399,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[new_token],  # type: ignore
                                 error=None,
+                                logprob_info=[logprob_infos[0]]
                             )
                         )
                 else:
@@ -413,6 +412,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
+                                    logprob_info=[logprob_infos[0]]
                                 )
                             )
                     else:
@@ -421,6 +421,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
+                                logprob_info=[logprob_infos[0]]
                             )
                         )
 

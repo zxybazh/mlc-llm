@@ -3,17 +3,18 @@ Common utilites for engine classes.
 """
 
 import time
-from typing import Tuple, Deque, Dict, Optional, Union, Callable
+from typing import Tuple, Deque, Dict, Optional, Union, Callable, List
 from collections import deque
 from threading import Condition, Lock
 
 import structlog
 
 from .base import (
+    GenerationSequence,
+    RawLogprobsInfo,
     Request,
     RequestId,
     RequestState,
-    GenerationSequence,
     SequenceId,
     StoppingCriteria,
 )
@@ -27,6 +28,7 @@ from .model_module import (
     Tokenizer as TokenizerP,
 )
 from ..model.base import ModelArtifactConfig
+from ..openai_logprob_protocol import LogprobsContent, TopLogprobs
 
 LOG = structlog.stdlib.get_logger(__name__)
 
@@ -133,6 +135,65 @@ def detokenize_incrementally(
         generation_sequence.prev_tokens.extend(new_tokens)
 
     return delta
+
+
+def logprob_detokenize(
+        tokenizer: TokenizerP,
+        logprob_info: Optional[RawLogprobsInfo],
+) -> Optional[LogprobsContent]:
+    """Detokenize tokens from RawLogprobInfo and convert the latter to LogprobContent"""
+    if logprob_info is None:
+        return None
+
+    top_logprobs: List[TopLogprobs] = []
+    if (
+        logprob_info.top_tokens is not None and
+        logprob_info.top_logprobs is not None
+    ):
+        top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
+        count: Dict[str, int] = {}
+        # dedup duplicates
+        # Todo: Make sure decode can generate different tokens
+        for top_token, _ in top_tokens:
+            detokenized = tokenizer.decode(top_token)
+            if detokenized in count:
+                count[detokenized] += 1
+            else:
+                count[detokenized] = 1
+        for top_token, top_logprob in top_tokens:
+            detokenized = tokenizer.decode(top_token)
+            if count[detokenized] != 1:
+                detokenized = f"{detokenized}_{top_token}"
+            top_logprobs.append(TopLogprobs(
+                token=detokenized,
+                logprob=float(top_logprob),
+                # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+                bytes=None,
+            ))
+
+    logprobs_content = LogprobsContent(
+        token=tokenizer.decode([logprob_info.current_token]),
+        logprob=logprob_info.current_logprob,
+        # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+        bytes=None,
+        top_logprobs=top_logprobs,
+    )
+
+    return logprobs_content
+
+
+def logprobs_detokenize(
+        tokenizer: TokenizerP,
+        logprobs_info: List[Optional[RawLogprobsInfo]],
+) -> Optional[List[Optional[LogprobsContent]]]:
+    res: List[Optional[LogprobsContent]] = []
+    for logprob_info in logprobs_info:
+        res.append(logprob_detokenize(tokenizer, logprob_info))
+
+    check_all = all([x is None for x in res])
+    if check_all:
+        return None
+    return res
 
 
 def check_stopping_sequences(stopping_criteria, output_text, delta, is_ended):

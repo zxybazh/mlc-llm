@@ -6,11 +6,21 @@ from abc import ABC, abstractmethod
 
 from typing import List, Callable, Any, Optional, Dict
 import inspect
+import numpy as np
 
 from .sampling_params import SamplingParams, SamplingType
+from ..openai_logprob_protocol import LogprobsContent
 
 LOG = structlog.stdlib.get_logger(__name__)
 RequestId = str
+
+
+@dataclass
+class RawLogprobsInfo:
+    current_token: int
+    current_logprob: float
+    top_tokens: Optional[np.array]
+    top_logprobs: Optional[np.array]
 
 
 # TODO(@sunggg): consider transition to something like Pydantic
@@ -155,6 +165,7 @@ class SequenceOutput:
     finish_reason: Optional[FinishReason] = None
     # Number of generated tokens so far
     num_generated_tokens: int = 0
+    logprob_info: Optional[List[Optional[LogprobsContent]]] = None
 
     @property
     def is_finished(self) -> bool:
