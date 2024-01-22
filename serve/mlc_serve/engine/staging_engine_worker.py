@@ -12,12 +12,14 @@ import structlog
 
 from .base import (
     FinishReason,
+    RawLogprobsInfo,
     RequestId,
     RequestState,
     ValidationError,
     SequenceId,
     GenerationSequence,
 )
+
 from .metrics import PrometheusMetrics
 from .metrics_labels import *
 from .model_module import (
@@ -40,7 +42,7 @@ class ShutdownCommand:
 
 @dataclass
 class AddRequestsCommand:
-    request_states: list[RequestState]
+    request_states: List[RequestState]
 
 
 @dataclass
@@ -61,14 +63,15 @@ GenerationLoopWorkerCommand = Union[
 @dataclass
 class SequenceGenerationOutput:
     id: SequenceId
-    new_tokens: list[int]
+    new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
+    logprob_info: Optional[List[RawLogprobsInfo]] = None
 
 
 @dataclass
 class GenerationLoopWorkerOutput:
-    sequences: list[SequenceGenerationOutput]
+    sequences: List[SequenceGenerationOutput]
     error: Optional[BaseException] = None
 
 
@@ -288,6 +291,7 @@ class GenerationLoopWorker(EngineBase):
                     id=res.sequence_id,
                     new_tokens=new_tokens,
                     finish_reason=finish_reason,
+                    logprob_info=res.logprob_info,
                 )
             )
 
