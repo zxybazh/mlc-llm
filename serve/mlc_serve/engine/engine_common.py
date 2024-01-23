@@ -186,6 +186,9 @@ def logprobs_detokenize(
         tokenizer: TokenizerP,
         logprobs_info: List[Optional[RawLogprobsInfo]],
 ) -> Optional[List[Optional[LogprobsContent]]]:
+    if logprobs_info is None:
+        return None
+
     res: List[Optional[LogprobsContent]] = []
     for logprob_info in logprobs_info:
         res.append(logprob_detokenize(tokenizer, logprob_info))
