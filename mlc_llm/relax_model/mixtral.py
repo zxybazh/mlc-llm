@@ -18,7 +18,7 @@ class MoELinear(nn.Module):
         if config.quantization_scheme.name == "q0f16":
             # weight is row major
             self.weight = nn.Parameter(
-                (num_experts, in_features, out_features),
+                (num_experts, out_features, in_features),
                 dtype="float16",
             )
         elif config.quantization_scheme.name == "q4f16_ft":
