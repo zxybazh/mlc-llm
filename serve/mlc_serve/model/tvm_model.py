@@ -22,6 +22,7 @@ from ..engine import (
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
     MLCServeEngineConfig,
+    RawLogprobsInfo,
 )
 from ..engine.model_module import (
     DecodeRequest,
@@ -84,6 +85,11 @@ def get_tvm_model(config, dev):
 
     return load_disco_module(config.model_artifact_path, lib_path, config.num_shards)
 
+def attach_detokenization_info(logprob_info:RawLogprobsInfo, token_ids: List[int]):
+    if logprob_info is None:
+        return None
+    logprob_info.previous_tokens = token_ids
+    return logprob_info
 
 def _prepare_inputs(
     sequence_ids,
@@ -326,6 +332,7 @@ class Model:
 
         try:
             next_tokens, logprob_infos = sample(logits, sampling_params, self.vocab_size)
+            current_ids = list(input_ids.numpy())
             assert next_tokens is not None
             outputs = []
             for i, (sequence_id, new_token) in enumerate(
@@ -341,9 +348,10 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
-                                logprob_info=[logprob_infos[i]],
+                                logprob_info=[attach_detokenization_info(logprob_infos[i], current_ids)],
                             )
                         )
+                        current_ids.append(new_token)
                 else:
                     outputs.append(
                         TextGenerationResult(
@@ -353,6 +361,7 @@ class Model:
                             logprob_info=[logprob_infos[i]],
                         )
                     )
+                    current_ids.append(new_token)
 
             return outputs
         except RuntimeError:

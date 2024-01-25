@@ -75,6 +75,7 @@ def fetch_raw_logprob_infos(
                 current_logprob=res_logprob,
                 top_tokens=top_tokens,
                 top_logprobs=top_logprobs,
+                previous_tokens=None
             ))
         else:
             logprob_infos.append(None)
