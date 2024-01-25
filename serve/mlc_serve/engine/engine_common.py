@@ -151,19 +151,13 @@ def logprob_detokenize(
         logprob_info.top_logprobs is not None
     ):
         top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
-        count: Dict[str, int] = {}
         # dedup duplicates
         # Todo: Make sure decode can generate different tokens
-        for top_token, _ in top_tokens:
-            detokenized = tokenizer.decode(top_token)
-            if detokenized in count:
-                count[detokenized] += 1
-            else:
-                count[detokenized] = 1
+        if logprob_info.previous_tokens is None:
+            logprob_info.previous_tokens = []
         for top_token, top_logprob in top_tokens:
-            detokenized = tokenizer.decode(top_token)
-            if count[detokenized] != 1:
-                detokenized = f"{detokenized}_{top_token}"
+            detokenized = tokenizer.convert_ids_to_tokens(logprob_info.previous_tokens + [top_token])[-1]
+            LOG.info(f"detokenized: {detokenized}")
             top_logprobs.append(TopLogprobs(
                 token=detokenized,
                 logprob=float(top_logprob),
@@ -184,14 +178,14 @@ def logprob_detokenize(
 
 def logprobs_detokenize(
         tokenizer: TokenizerP,
-        logprobs_info: List[Optional[RawLogprobsInfo]],
+        logprob_info: List[Optional[RawLogprobsInfo]],
 ) -> Optional[List[Optional[LogprobsContent]]]:
-    if logprobs_info is None:
+    if logprob_info is None:
         return None
 
     res: List[Optional[LogprobsContent]] = []
-    for logprob_info in logprobs_info:
-        res.append(logprob_detokenize(tokenizer, logprob_info))
+    for info in logprob_info:
+        res.append(logprob_detokenize(tokenizer, info))
 
     check_all = all([x is None for x in res])
     if check_all:
