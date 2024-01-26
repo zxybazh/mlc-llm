@@ -138,8 +138,8 @@ def detokenize_incrementally(
 
 
 def logprob_detokenize(
-        tokenizer: TokenizerP,
-        logprob_info: Optional[RawLogprobsInfo],
+    tokenizer: TokenizerP,
+    logprob_info: Optional[RawLogprobsInfo],
 ) -> Optional[LogprobsContent]:
     """Detokenize tokens from RawLogprobInfo and convert the latter to LogprobContent"""
     if logprob_info is None:
@@ -176,8 +176,8 @@ def logprob_detokenize(
 
 
 def logprobs_detokenize(
-        tokenizer: TokenizerP,
-        logprob_info: List[Optional[RawLogprobsInfo]],
+    tokenizer: TokenizerP,
+    logprob_info: List[Optional[RawLogprobsInfo]],
 ) -> Optional[List[Optional[LogprobsContent]]]:
     if logprob_info is None:
         return None
