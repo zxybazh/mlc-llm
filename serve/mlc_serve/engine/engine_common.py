@@ -146,23 +146,24 @@ def logprob_detokenize(
         return None
 
     top_logprobs: List[TopLogprobs] = []
-    if (
-        logprob_info.top_tokens is not None and
-        logprob_info.top_logprobs is not None
-    ):
+    if logprob_info.top_tokens is not None and logprob_info.top_logprobs is not None:
         top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
         # dedup duplicates
         # Todo: Make sure decode can generate different tokens
         if logprob_info.previous_tokens is None:
             logprob_info.previous_tokens = []
         for top_token, top_logprob in top_tokens:
-            detokenized = tokenizer.convert_ids_to_tokens(logprob_info.previous_tokens + [top_token])[-1]
-            top_logprobs.append(TopLogprobs(
-                token=detokenized,
-                logprob=float(top_logprob),
-                # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
-                bytes=None,
-            ))
+            detokenized = tokenizer.convert_ids_to_tokens(
+                logprob_info.previous_tokens + [top_token]
+            )[-1]
+            top_logprobs.append(
+                TopLogprobs(
+                    token=detokenized,
+                    logprob=float(top_logprob),
+                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+                    bytes=None,
+                )
+            )
 
     logprobs_content = LogprobsContent(
         token=tokenizer.decode([logprob_info.current_token]),
