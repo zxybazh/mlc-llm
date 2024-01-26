@@ -45,6 +45,8 @@ def postproc_sampling_args(args):
         "repetition_penalty": 1.0,
         "top_p": 1.0,
         "top_k": -1,
+        "logprobs": False,
+        "top_logprobs": 5,
     }
 
     if args.apply_all_sampling_params:
