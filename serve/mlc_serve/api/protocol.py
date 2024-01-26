@@ -73,8 +73,8 @@ class ChatCompletionRequest(BaseModel):
     logit_bias: Optional[Dict[int, float]] = None
     user: Optional[str] = None
     ignore_eos: Optional[bool] = False
-    logprobs: Optional[bool] = False
-    top_logprobs: Optional[int] = None
+    logprobs: bool = False
+    top_logprobs: int = 0
 
 
 class ChatCompletionResponseChoice(BaseModel):

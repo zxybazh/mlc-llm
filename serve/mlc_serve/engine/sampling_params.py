@@ -49,7 +49,7 @@ class SamplingParams:
         logprobs: Optional[bool] Whether to return log probabilities of the output
             tokens or not. If true, returns the log probabilities of each output
             token returned in the content of message.
-        top_logprobs: Optional[Integer] An integer between 1 and 5 specifying
+        top_logprobs: Optional[Integer] An integer between 0 and 5 specifying
             the number of most likely tokens to return at each token position,
             each with an associated log probability. logprobs must be set to
             true if this parameter is used.
@@ -65,8 +65,8 @@ class SamplingParams:
     appeared_tokens_freq: Dict[int, int] = None
     logit_bias_index: list[int] = None
     logit_bias_value: list[float] = None
-    logprobs: Optional[bool] = False
-    top_logprobs: Optional[int] = None
+    logprobs: bool = False
+    top_logprobs: int = 0
 
     def __post_init__(self):
         self.appeared_tokens_freq = {}
@@ -104,10 +104,10 @@ class SamplingParams:
                     raise ValueError(
                         f"logit bias must be in [-100, 100], got {bias} for token {token}."
                     )
-        if self.logprobs is not None and self.logprobs:
-            if (self.top_logprobs < 1 or self.top_logprobs > LOGPROB_TOP_K_MAX):
+        if self.logprobs:
+            if (self.top_logprobs < 0 or self.top_logprobs > LOGPROB_TOP_K_MAX):
                 raise ValueError(
-                    f"top_logprobs must be between 1 and {LOGPROB_TOP_K_MAX}, got {self.top_logprobs}."
+                    f"top_logprobs must be between 0 and {LOGPROB_TOP_K_MAX}, got {self.top_logprobs}."
                 )
 
     def _verify_greedy_sampling(self) -> None:

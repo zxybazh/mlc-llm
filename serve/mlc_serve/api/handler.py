@@ -64,7 +64,7 @@ def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
         sampling_params.top_p = request.top_p
     if request.logit_bias is not None:
         sampling_params.logit_bias = request.logit_bias
-    if request.logprobs is not None:
+    if request.logprobs:
         sampling_params.top_logprobs = request.top_logprobs
         sampling_params.logprobs = request.logprobs
     return sampling_params
