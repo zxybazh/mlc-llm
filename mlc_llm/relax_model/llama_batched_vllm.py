@@ -1,4 +1,4 @@
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 from dataclasses import dataclass
 
@@ -48,7 +48,20 @@ def apply_rotary_pos_emb(q, k, positions, position_embedding_base):
 
 
 @dataclass
+class PrefillAttentionInput:
+    seq_start: Optional[relax.Expr]  # (num_seq + 1,)
+    indices_within_window: Optional[relax.Expr]  # (num_cached_total,)
+
+
+@dataclass
+class DecodeAttentionInput:
+    seq_lens: relax.Expr  # (num_seq,)
+    block_tables: Optional[relax.Expr]  # (num_seq, max_num_blocks_per_seq)
+
+
+@dataclass
 class EvaluateMultiQueryInput:
+    seq_start: Optional[relax.Expr]  # (num_seq + 1,)
     query_start: relax.Expr  # (num_query_token + 1,)
     max_query_len: relax.Expr  # (), must be on CPU
     # The followings are only needed for our naive implementation of multi-query eval
@@ -58,6 +71,15 @@ class EvaluateMultiQueryInput:
     permute_indices_after_concat: relax.Expr  # (num_past_token + num_query_token,)
 
 
+@dataclass
+class AttentionInput:
+    # KV cache and slot_mapping are not needed during memory profiling, hench they are optional.
+    kv_cache: Optional[Tuple[relax.Expr, relax.Expr]]
+    slot_mapping: Optional[relax.Expr]  # (num_query_token,)
+    max_seqlen: relax.Expr  # (), must be on CPU
+    aux_info: Union[PrefillAttentionInput, DecodeAttentionInput, EvaluateMultiQueryInput]
+
+
 class LlamaAttentionBatched(LlamaAttentionBase):
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
@@ -65,6 +87,7 @@ class LlamaAttentionBatched(LlamaAttentionBase):
 
         if config.sliding_window:
             self.sliding_window = T.IntImm("int32", config.sliding_window)
+
         max_context_length = config.sliding_window or config.max_sequence_length
         partition_size = 512  # partition_size in vLLM attention
         self.max_num_partitions = (max_context_length + partition_size - 1) // partition_size
@@ -73,16 +96,7 @@ class LlamaAttentionBatched(LlamaAttentionBase):
         self,
         hidden_states: relax.Expr,  # (num_query_token, hidden_size)
         positions: relax.Expr,  # (num_query_token,), for batched RoPE
-        seq_lens: relax.Expr,  # (num_seq,)
-        kv_cache: Optional[Tuple[relax.Expr, relax.Expr]],
-        slot_mapping: Optional[relax.Expr],  # (num_query_token,)
-        max_seqlen: Optional[relax.Expr],  # (), must be on CPU
-        seq_start: Optional[relax.Expr],  # (num_seq + 1,), for prefill
-        block_tables: Optional[relax.Expr],  # (num_seq, max_num_blocks_per_seq), for decode
-        indices_within_window: Optional[
-            relax.Expr
-        ],  # (num_cached_total,), for prefill with sliding-window attention,
-        eval_multi_input: Optional[EvaluateMultiQueryInput],
+        attn_input: AttentionInput,
     ):
         num_query_tokens, _ = hidden_states.struct_info.shape
 
@@ -94,19 +108,25 @@ class LlamaAttentionBatched(LlamaAttentionBase):
 
         queries, keys = apply_rotary_pos_emb(queries, keys, positions, self.position_embedding_base)
 
-        if kv_cache:
+        if attn_input.kv_cache:
             # Paged KV cache update
-            k_cache, v_cache = kv_cache
+            k_cache, v_cache = attn_input.kv_cache
+
+            if isinstance(attn_input.aux_info, PrefillAttentionInput):
+                indices_within_window = attn_input.aux_info.indices_within_window
+            else:
+                indices_within_window = None
 
             if indices_within_window:
                 # Cache only the most recent keys and values within the window.
                 keys_to_cache = nn.emit(take(keys, indices_within_window, axis=0))
                 values_to_cache = nn.emit(take(values, indices_within_window, axis=0))
-                slot_mapping = nn.emit(take(slot_mapping, indices_within_window, axis=0))
+                slot_mapping = nn.emit(take(attn_input.slot_mapping, indices_within_window, axis=0))
             else:
                 # For decode or prefill without sliding window, cache all keys / values.
                 keys_to_cache = keys
                 values_to_cache = values
+                slot_mapping = attn_input.slot_mapping
 
             # kv caches are updated inplace, but make it look like a pure operation
             kv = nn.emit(
@@ -125,11 +145,11 @@ class LlamaAttentionBatched(LlamaAttentionBase):
         else:
             k_cache = v_cache = None
 
-        if eval_multi_input:
+        if isinstance(attn_input.aux_info, EvaluateMultiQueryInput):
             assert k_cache and v_cache
             num_kv_head = v_cache.struct_info.shape[1]
             head_size = v_cache.struct_info.shape[2]
-            num_past_token = eval_multi_input.past_slot_mapping.struct_info.shape[0]
+            num_past_token = attn_input.aux_info.past_slot_mapping.struct_info.shape[0]
             kv_shape = (num_past_token, num_kv_head, head_size)
             kv_sinfo = relax.TensorStructInfo(kv_shape, k_cache.struct_info.dtype)
 
@@ -138,7 +158,7 @@ class LlamaAttentionBatched(LlamaAttentionBase):
                     "tvm.contrib.vllm.reconstruct_from_cache",
                     k_cache,
                     v_cache,
-                    eval_multi_input.past_slot_mapping,
+                    attn_input.aux_info.past_slot_mapping,
                     sinfo_args=[kv_sinfo, kv_sinfo],
                 )
             )
@@ -150,24 +170,26 @@ class LlamaAttentionBatched(LlamaAttentionBase):
             # op and the provided permutation indices.
             keys = nn.emit(
                 take(
-                    concat([keys_past, keys]), eval_multi_input.permute_indices_after_concat, axis=0
+                    concat([keys_past, keys]),
+                    attn_input.aux_info.permute_indices_after_concat,
+                    axis=0,
                 )
             )
             values = nn.emit(
                 take(
                     concat([values_past, values]),
-                    eval_multi_input.permute_indices_after_concat,
+                    attn_input.aux_info.permute_indices_after_concat,
                     axis=0,
                 )
             )
-            seq_start_q = eval_multi_input.query_start
-            max_seqlen_q = eval_multi_input.max_query_len
-            seq_start_k = seq_start
-            max_seqlen_k = max_seqlen
-        elif seq_start:
+            seq_start_q = attn_input.aux_info.query_start
+            max_seqlen_q = attn_input.aux_info.max_query_len
+            seq_start_k = attn_input.aux_info.seq_start
+            max_seqlen_k = attn_input.max_seqlen
+        elif isinstance(attn_input.aux_info, PrefillAttentionInput):
             # prefill
-            seq_start_q = seq_start_k = seq_start
-            max_seqlen_q = max_seqlen_k = max_seqlen
+            seq_start_q = seq_start_k = attn_input.aux_info.seq_start
+            max_seqlen_q = max_seqlen_k = attn_input.max_seqlen
         else:
             # decode
             seq_start_q = seq_start_k = None
@@ -190,16 +212,22 @@ class LlamaAttentionBatched(LlamaAttentionBase):
             )
         else:
             # Decode, using vLLM kernel
+            assert isinstance(attn_input.aux_info, DecodeAttentionInput)
+
             exp_sums = nn.emit(
                 relax.op.builtin.alloc_tensor(
-                    relax.ShapeExpr((num_query_tokens, self.num_query_heads, self.max_num_partitions)),
+                    relax.ShapeExpr(
+                        (num_query_tokens, self.num_query_heads, self.max_num_partitions)
+                    ),
                     dtype="float32",
                     runtime_device_index=0,
                 )
             )
             max_logits = nn.emit(
                 relax.op.builtin.alloc_tensor(
-                    relax.ShapeExpr((num_query_tokens, self.num_query_heads, self.max_num_partitions)),
+                    relax.ShapeExpr(
+                        (num_query_tokens, self.num_query_heads, self.max_num_partitions)
+                    ),
                     dtype="float32",
                     runtime_device_index=0,
                 )
@@ -207,7 +235,12 @@ class LlamaAttentionBatched(LlamaAttentionBase):
             tmp_out = nn.emit(
                 relax.op.builtin.alloc_tensor(
                     relax.ShapeExpr(
-                        (num_query_tokens, self.num_query_heads, self.max_num_partitions, self.head_dim)
+                        (
+                            num_query_tokens,
+                            self.num_query_heads,
+                            self.max_num_partitions,
+                            self.head_dim,
+                        )
                     ),
                     dtype=queries.struct_info.dtype,
                     runtime_device_index=0,
@@ -220,10 +253,10 @@ class LlamaAttentionBatched(LlamaAttentionBase):
                         queries,
                         k_cache,
                         v_cache,
-                        block_tables,
-                        seq_lens,
+                        attn_input.aux_info.block_tables,
+                        attn_input.aux_info.seq_lens,
                         16,  # block_size
-                        max_seqlen,
+                        attn_input.max_seqlen,
                         exp_sums,
                         max_logits,
                         tmp_out,
@@ -249,14 +282,7 @@ class LlamaDecoderLayerBatched(LlamaDecoderLayer):
         self,
         hidden_states: relax.Expr,
         positions: relax.Expr,
-        seq_lens: relax.Expr,
-        kv_cache: Optional[Tuple[relax.Expr, relax.Expr]],
-        slot_mapping: Optional[relax.Expr],
-        max_seqlen: Optional[relax.Expr],
-        seq_start: Optional[relax.Expr],
-        block_tables: Optional[relax.Expr],
-        indices_within_window: Optional[relax.Expr],
-        eval_multi_input: Optional[EvaluateMultiQueryInput],
+        attn_input: AttentionInput,
     ) -> Tuple[relax.Expr, Optional[Tuple[relax.Expr, relax.Expr]]]:
         residual = hidden_states
 
@@ -264,16 +290,9 @@ class LlamaDecoderLayerBatched(LlamaDecoderLayer):
 
         # Self Attention
         hidden_states, new_kv = self.self_attn(
-            hidden_states=hidden_states,
-            positions=positions,
-            seq_lens=seq_lens,
-            kv_cache=kv_cache,
-            slot_mapping=slot_mapping,
-            max_seqlen=max_seqlen,
-            seq_start=seq_start,
-            block_tables=block_tables,
-            indices_within_window=indices_within_window,
-            eval_multi_input=eval_multi_input,
+            hidden_states,
+            positions,
+            attn_input,
         )
 
         hidden_states = self.post_self_attn(hidden_states, residual)
@@ -295,16 +314,11 @@ class LlamaModel(nn.Module):
     def __init__(
         self,
         config: LlamaConfig,
-        cpu_device: VDevice,
         vocab_size_var: tvm.tir.Var,
         sep_embed: bool = False,
     ):
         self.padding_idx = config.pad_token_id
         self.embed_tokens = None
-
-        num_query_heads = config.num_attention_heads // config.num_shards
-        num_key_value_heads = config.get_num_key_value_heads() // config.num_shards
-        num_queries_per_kv = num_query_heads // num_key_value_heads
 
         if not sep_embed:
             self.embed_tokens = Embedding(vocab_size_var, config.hidden_size, dtype=config.dtype)
@@ -314,21 +328,14 @@ class LlamaModel(nn.Module):
         )
         self.norm = LlamaRMSNorm(config.hidden_size, dtype=config.dtype, eps=config.rms_norm_eps)
 
-        self.cpu_device = cpu_device
-
     def forward(
         self,
         inputs: relax.Expr,
         positions: relax.Expr,
-        seq_lens: relax.Expr,
         kv_caches: Optional[relax.Expr],
         slot_mapping: Optional[relax.Expr],
-        seq_start: Optional[relax.Expr],
-        block_tables: Optional[relax.Expr],
-        indices_within_window: Optional[relax.Expr],
-        query_lens: Optional[relax.Expr],
-        past_slot_mapping: Optional[relax.Expr],
-        permute_indices_after_concat: Optional[relax.Expr],
+        max_seqlen: relax.Expr,
+        attn_aux_info: Union[PrefillAttentionInput, DecodeAttentionInput, EvaluateMultiQueryInput],
     ):
         if self.embed_tokens:
             inputs_embeds = self.embed_tokens(inputs)
@@ -337,21 +344,7 @@ class LlamaModel(nn.Module):
 
         hidden_states = inputs_embeds
 
-        # max_seqlen needs to be on CPU, so that vLLM and Flash Attention can directly get the
-        # integer length by max_seqlen->data[0]. Otherwise, we need to repeatedly do cudaMemcpy
-        # of a single int32.
-        max_seqlen = R.to_vdevice(R.max(seq_lens), self.cpu_device)
-
         new_kvs = ()
-
-        if query_lens:
-            max_query_len = R.to_vdevice(R.max(query_lens), self.cpu_device)
-            query_start = create_seq_start(query_lens)
-            eval_multi_input = EvaluateMultiQueryInput(
-                query_start, max_query_len, past_slot_mapping, permute_indices_after_concat
-            )
-        else:
-            eval_multi_input = None
 
         for idx, decoder_layer in enumerate(self.layers):
             if kv_caches:
@@ -359,17 +352,12 @@ class LlamaModel(nn.Module):
             else:
                 cache = None
 
+            attn_input = AttentionInput(cache, slot_mapping, max_seqlen, attn_aux_info)
+
             hidden_states, new_kv = decoder_layer(
                 hidden_states,
                 positions,
-                seq_lens,
-                cache,
-                slot_mapping,
-                max_seqlen,
-                seq_start,
-                block_tables,
-                indices_within_window,
-                eval_multi_input,
+                attn_input,
             )
             new_kvs += new_kv
 
@@ -385,7 +373,8 @@ class LlamaForCausalLM(nn.Module):
         sep_embed: bool = False,
     ):
         self.num_shards = config.num_shards
-        self.model = LlamaModel(config, cpu_device, vocab_size_var, sep_embed)
+        self.cpu_device = cpu_device
+        self.model = LlamaModel(config, vocab_size_var, sep_embed)
         self.lm_head = Linear(config.hidden_size, vocab_size_var, dtype=config.dtype, bias=False)
 
         ############ Rotary embedding constants ############
@@ -452,27 +441,38 @@ class LlamaForCausalLM(nn.Module):
                     ccl.broadcast_from_worker0(permute_indices_after_concat)
                 )
 
-        # TODO: Update this condition for evaluate multi
         is_prompt = block_tables is None and query_lens is None
-        is_eval_multi = query_lens is not None
 
-        if is_prompt or is_eval_multi:  # prefill and evaluate
+        if query_lens is not None:
             seq_start = create_seq_start(seq_lens)
+            max_query_len = R.to_vdevice(R.max(query_lens), self.cpu_device)
+            query_start = create_seq_start(query_lens)
+            attn_aux_info = EvaluateMultiQueryInput(
+                seq_start,
+                query_start,
+                max_query_len,
+                past_slot_mapping,
+                permute_indices_after_concat,
+            )
+        elif is_prompt:
+            seq_start = create_seq_start(seq_lens)
+            attn_aux_info = PrefillAttentionInput(seq_start, indices_within_window)
         else:
             seq_start = None
+            attn_aux_info = DecodeAttentionInput(seq_lens, block_tables)
+
+        # max_seqlen needs to be on CPU, so that vLLM and Flash Attention can directly get the
+        # integer length by max_seqlen->data[0]. Otherwise, we need to repeatedly do cudaMemcpy
+        # of a single int32.
+        max_seqlen = R.to_vdevice(R.max(seq_lens), self.cpu_device)
 
         hidden_states, new_kvs = self.model(
             input_ids,
             positions,
-            seq_lens,
             kv_caches,
             slot_mapping,
-            seq_start,
-            block_tables,
-            indices_within_window,
-            query_lens,
-            past_slot_mapping,
-            permute_indices_after_concat,
+            max_seqlen,
+            attn_aux_info,
         )
 
         if is_prompt:
