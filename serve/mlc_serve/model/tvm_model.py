@@ -86,8 +86,6 @@ def get_tvm_model(config, dev):
     return load_disco_module(config.model_artifact_path, lib_path, config.num_shards)
 
 def attach_detokenization_info(logprob_info:RawLogprobsInfo, token_ids: List[int]):
-    if logprob_info is None:
-        return None
     logprob_info.previous_tokens = token_ids
     return logprob_info
 
@@ -332,11 +330,10 @@ class Model:
 
         try:
             next_tokens, logprob_infos = sample(logits, sampling_params, self.vocab_size)
-            current_ids = list(input_ids.numpy())
             assert next_tokens is not None
             outputs = []
-            for i, (sequence_id, new_token) in enumerate(
-                zip(sequence_ids, next_tokens)
+            for i, (sequence_id, new_token, token_ids) in enumerate(
+                zip(sequence_ids, next_tokens, all_token_ids)
             ):
                 if not new_token in requests[i].sampling_params.appeared_tokens_freq:
                     requests[i].sampling_params.appeared_tokens_freq[new_token] = 0
@@ -348,20 +345,22 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
-                                logprob_info=[attach_detokenization_info(logprob_infos[i], current_ids)],
+                                logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
                             )
                         )
-                        current_ids.append(new_token)
+                        if logprob_infos[i]:
+                            token_ids.append(new_token)
                 else:
                     outputs.append(
                         TextGenerationResult(
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
-                            logprob_info=[logprob_infos[i]],
+                            logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
                         )
                     )
-                    current_ids.append(new_token)
+                    if logprob_infos[i]:
+                        token_ids.append(new_token)
 
             return outputs
         except RuntimeError:
