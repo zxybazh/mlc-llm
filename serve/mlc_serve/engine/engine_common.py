@@ -153,9 +153,11 @@ def logprob_detokenize(
         if logprob_info.previous_tokens is None:
             logprob_info.previous_tokens = []
         for top_token, top_logprob in top_tokens:
-            detokenized = tokenizer.convert_ids_to_tokens(
-                logprob_info.previous_tokens + [top_token]
-            )[-1]
+            # TODO(vvchernov): not clear what do we want
+            # detokenized = tokenizer.convert_ids_to_tokens(
+            #     logprob_info.previous_tokens + [top_token]
+            # )[-1]
+            detokenized = tokenizer.decode(top_token)
             top_logprobs.append(
                 TopLogprobs(
                     token=detokenized,
