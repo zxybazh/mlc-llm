@@ -157,7 +157,6 @@ def logprob_detokenize(
             logprob_info.previous_tokens = []
         for top_token, top_logprob in top_tokens:
             detokenized = tokenizer.convert_ids_to_tokens(logprob_info.previous_tokens + [top_token])[-1]
-            LOG.info(f"detokenized: {detokenized}")
             top_logprobs.append(TopLogprobs(
                 token=detokenized,
                 logprob=float(top_logprob),
