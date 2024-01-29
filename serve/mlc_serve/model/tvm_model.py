@@ -252,8 +252,6 @@ class Model:
         )
 
         input_shape = input_ids.shape
-        # TODO(vvchernov): quick fix, but need to refactor logic
-        current_ids = list(input_ids.numpy())
 
         if self.disco_session:
             input_ids = copy_to_worker_0(self.disco_session, input_ids)
