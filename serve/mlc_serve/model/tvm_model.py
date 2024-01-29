@@ -348,8 +348,8 @@ class Model:
                                 logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
                             )
                         )
-                        if logprob_infos[i]:
-                            token_ids.append(new_token)
+                        # if logprob_infos[i]:
+                        #     token_ids.append(new_token)
                 else:
                     outputs.append(
                         TextGenerationResult(
@@ -359,8 +359,8 @@ class Model:
                             logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
                         )
                     )
-                    if logprob_infos[i]:
-                        token_ids.append(new_token)
+                    # if logprob_infos[i]:
+                    #     token_ids.append(new_token)
 
             return outputs
         except RuntimeError:
