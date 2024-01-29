@@ -138,31 +138,32 @@ def detokenize_incrementally(
 
 
 def logprob_detokenize(
-        tokenizer: TokenizerP,
-        logprob_info: Optional[RawLogprobsInfo],
+    tokenizer: TokenizerP,
+    logprob_info: Optional[RawLogprobsInfo],
 ) -> Optional[LogprobsContent]:
     """Detokenize tokens from RawLogprobInfo and convert the latter to LogprobContent"""
     if logprob_info is None:
         return None
 
     top_logprobs: List[TopLogprobs] = []
-    if (
-        logprob_info.top_tokens is not None and
-        logprob_info.top_logprobs is not None
-    ):
+    if logprob_info.top_tokens is not None and logprob_info.top_logprobs is not None:
         top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
-        # dedup duplicates
-        # Todo: Make sure decode can generate different tokens
         if logprob_info.previous_tokens is None:
             logprob_info.previous_tokens = []
         for top_token, top_logprob in top_tokens:
-            detokenized = tokenizer.convert_ids_to_tokens(logprob_info.previous_tokens + [top_token])[-1]
-            top_logprobs.append(TopLogprobs(
-                token=detokenized,
-                logprob=float(top_logprob),
-                # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
-                bytes=None,
-            ))
+            # TODO(vvchernov): not clear what do we want
+            # detokenized = tokenizer.convert_ids_to_tokens(
+            #     logprob_info.previous_tokens + [top_token]
+            # )[-1]
+            detokenized = tokenizer.decode(top_token)
+            top_logprobs.append(
+                TopLogprobs(
+                    token=detokenized,
+                    logprob=float(top_logprob),
+                    # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
+                    bytes=None,
+                )
+            )
 
     logprobs_content = LogprobsContent(
         token=tokenizer.decode([logprob_info.current_token]),
@@ -176,12 +177,9 @@ def logprob_detokenize(
 
 
 def logprobs_detokenize(
-        tokenizer: TokenizerP,
-        logprob_info: List[Optional[RawLogprobsInfo]],
+    tokenizer: TokenizerP,
+    logprob_info: List[Optional[RawLogprobsInfo]],
 ) -> Optional[List[Optional[LogprobsContent]]]:
-    if logprob_info is None:
-        return None
-
     res: List[Optional[LogprobsContent]] = []
     for info in logprob_info:
         res.append(logprob_detokenize(tokenizer, info))
