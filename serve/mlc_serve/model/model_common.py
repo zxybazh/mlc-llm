@@ -63,7 +63,6 @@ def get_raw_logprob_info(
         current_logprob=res_logprob,
         top_token_ids=top_tokens,
         top_logprobs=top_logprobs,
-        previous_tokens=None
     )
 
 

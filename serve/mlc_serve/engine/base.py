@@ -21,7 +21,6 @@ class RawLogprobsInfo:
     current_logprob: float
     top_token_ids: Optional[np.array]
     top_logprobs: Optional[np.array]
-    previous_tokens: Optional[List[int]]
 
 
 # TODO(@sunggg): consider transition to something like Pydantic
