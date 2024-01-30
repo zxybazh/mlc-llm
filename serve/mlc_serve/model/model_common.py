@@ -44,7 +44,7 @@ def get_raw_logprob_info(
     top_logprobs_num,
 ) -> RawLogprobsInfo:
     logprobs = torch.log_softmax(logits, dim=-1)
-    res_logprob = logprobs[token_id].cpu().numpy()
+    res_logprob = logprobs[token_id]
 
     if top_logprobs_num == 0:
         top_logprobs = None
@@ -146,7 +146,7 @@ def sample(
     logprob_infos: List[Optional[RawLogprobsInfo]] = [None] * num_seq
 
     if logits_greedy.shape[0] > 0:
-        res_greedy = torch.argmax(logits_greedy, -1)
+        res_greedy = torch.argmax(logits_greedy, -1).cpu().numpy()
 
         logprob_infos = get_masked_logprobs(
             logprob_infos,
@@ -156,7 +156,6 @@ def sample(
             res_greedy,
         )
 
-        res_greedy = res_greedy.cpu().numpy()
         # Case when there's only greedy sampling
         if logits_greedy.shape[0] == num_seq:
             torch.cuda.nvtx.range_pop()
@@ -227,7 +226,7 @@ def sample(
         torch.cuda.nvtx.range_pop()
         return None
 
-    res_random = torch.multinomial(probs, 1, True)[:, 0]
+    res_random = torch.multinomial(probs, 1, True)[:, 0].cpu().numpy()
 
     logprob_infos = get_masked_logprobs(
         logprob_infos,
@@ -237,7 +236,6 @@ def sample(
         res_random,
     )
 
-    res_random = res_random.cpu().numpy()
     # Case when there's only random sampling
     if logits_random.shape[0] == num_seq:
         torch.cuda.nvtx.range_pop()
