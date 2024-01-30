@@ -67,25 +67,41 @@ def get_raw_logprob_info(
     )
 
 
-def get_masked_logprobs(
-    logprob_infos: List[Optional[RawLogprobsInfo]],
-    mask: torch.Tensor,
+def get_logprob_indices(
     sampling_params: List[SamplingParams],
+    num_seq: int,
+) -> Tuple[List[Tuple[int, int, int]], List[Tuple[int, int, int]]]:
+    lgp_inds_greedy: List[Tuple[int, int, int]] = []
+    lgp_inds_random: List[Tuple[int, int, int]] = []
+
+    g_ind = 0
+    r_ind = 0
+    for i in range(num_seq):
+        sampling_param = sampling_params[i]
+        if sampling_param.sampling_type == SamplingType.RANDOM:
+            if sampling_param.logprobs:
+                lgp_inds_random.append((i, r_ind, sampling_param.top_logprobs))
+            r_ind = r_ind + 1
+        else:
+            if sampling_param.logprobs:
+                lgp_inds_greedy.append((i, g_ind, sampling_param.top_logprobs))
+            g_ind = g_ind + 1
+
+    return lgp_inds_greedy, lgp_inds_random
+
+
+def get_raw_logprob_infos(
+    logprob_infos: List[Optional[RawLogprobsInfo]],
+    indices: List[Tuple[int, int, int]],
     logits: torch.Tensor,
     token_ids: torch.Tensor,
 ) -> List[Optional[RawLogprobsInfo]]:
-    num_seq = len(logprob_infos)
-
-    mask_counter = 0
-    for i in range(num_seq):
-        if mask[i]:
-            if sampling_params[i].logprobs:
-                logprob_infos[i] = get_raw_logprob_info(
-                    logits[mask_counter],
-                    token_ids[mask_counter],
-                    sampling_params[i].top_logprobs,
-                )
-            mask_counter = mask_counter + 1
+    for (i, ind, top_logprobs) in indices:
+        logprob_infos[i] = get_raw_logprob_info(
+            logits[ind],
+            token_ids[ind],
+            top_logprobs,
+        )
 
     return logprob_infos
 
@@ -144,14 +160,17 @@ def sample(
     logits_greedy = logits[mask_greedy_dvc]
 
     logprob_infos: List[Optional[RawLogprobsInfo]] = [None] * num_seq
+    lgp_inds_greedy, lgp_inds_random = get_logprob_indices(
+        sampling_params,
+        num_seq,
+    )
 
     if logits_greedy.shape[0] > 0:
         res_greedy = torch.argmax(logits_greedy, -1).cpu().numpy()
 
-        logprob_infos = get_masked_logprobs(
+        logprob_infos = get_raw_logprob_infos(
             logprob_infos,
-            mask_greedy_dvc,
-            sampling_params,
+            lgp_inds_greedy,
             logits_greedy,
             res_greedy,
         )
@@ -228,10 +247,9 @@ def sample(
 
     res_random = torch.multinomial(probs, 1, True)[:, 0].cpu().numpy()
 
-    logprob_infos = get_masked_logprobs(
+    logprob_infos = get_raw_logprob_infos(
         logprob_infos,
-        mask_random_dvc,
-        sampling_params,
+        lgp_inds_random,
         logits_random,
         res_random,
     )
