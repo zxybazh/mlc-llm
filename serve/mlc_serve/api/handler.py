@@ -194,7 +194,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
-                    logprob_info=Logprobs(content=seq.logprob_info) if seq.logprob_info else None
+                    logprob_info=Logprobs(content=seq.logprob_info) if seq.logprob_info != [] else None
                 )
                 for seq in res.sequences
             ]

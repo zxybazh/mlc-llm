@@ -4,7 +4,7 @@ The worker for StagingInferenceEngine
 import time
 import multiprocessing
 import multiprocessing.synchronize
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Thread, Lock
 from typing import Callable, Optional, Union, Any, Dict, List
 
@@ -66,7 +66,7 @@ class SequenceGenerationOutput:
     new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
-    logprob_info: Optional[List[RawLogprobsInfo]] = None
+    logprob_info: List[RawLogprobsInfo] = field(default_factory=list)
 
 
 @dataclass
