@@ -59,8 +59,7 @@ def get_raw_logprob_info(
 
     # Set to raw logprob info
     return RawLogprobsInfo(
-        # TODO(vvchernov): it is number, cpu().numpy()?
-        current_token=token.cpu().numpy(),
+        current_token=token,
         current_logprob=res_logprob,
         top_tokens=top_tokens,
         top_logprobs=top_logprobs,
