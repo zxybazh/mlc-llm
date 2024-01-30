@@ -40,11 +40,11 @@ def get_num_cache_blocks(
 
 def get_raw_logprob_info(
     logits,
-    token,
+    token_id,
     top_logprobs_num,
 ) -> RawLogprobsInfo:
     logprobs = torch.log_softmax(logits, dim=-1)
-    res_logprob = logprobs[token].cpu().numpy()
+    res_logprob = logprobs[token_id].cpu().numpy()
 
     if top_logprobs_num == 0:
         top_logprobs = None
@@ -59,9 +59,9 @@ def get_raw_logprob_info(
 
     # Set to raw logprob info
     return RawLogprobsInfo(
-        current_token=token,
+        current_token_id=token_id,
         current_logprob=res_logprob,
-        top_tokens=top_tokens,
+        top_token_ids=top_tokens,
         top_logprobs=top_logprobs,
         previous_tokens=None
     )
@@ -72,7 +72,7 @@ def get_masked_logprobs(
     mask: torch.Tensor,
     sampling_params: List[SamplingParams],
     logits: torch.Tensor,
-    tokens: torch.Tensor,
+    token_ids: torch.Tensor,
 ) -> List[Optional[RawLogprobsInfo]]:
     num_seq = len(logprob_infos)
 
@@ -82,7 +82,7 @@ def get_masked_logprobs(
             if sampling_params[i].logprobs:
                 logprob_infos[i] = get_raw_logprob_info(
                     logits[mask_counter],
-                    tokens[mask_counter],
+                    token_ids[mask_counter],
                     sampling_params[i].top_logprobs,
                 )
             mask_counter = mask_counter + 1
