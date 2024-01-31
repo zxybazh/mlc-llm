@@ -12,6 +12,7 @@ import structlog
 from .base import (
     GenerationSequence,
     RawLogprobsInfo,
+    RawLogprobsInfos,
     Request,
     RequestId,
     RequestState,
@@ -146,19 +147,12 @@ def logprob_detokenize(
         return None
 
     top_logprobs: List[TopLogprobs] = []
-    if logprob_info.top_tokens is not None and logprob_info.top_logprobs is not None:
-        top_tokens = list(zip(logprob_info.top_tokens, logprob_info.top_logprobs))
-        if logprob_info.previous_tokens is None:
-            logprob_info.previous_tokens = []
-        for top_token, top_logprob in top_tokens:
-            # TODO(vvchernov): not clear what do we want
-            # detokenized = tokenizer.convert_ids_to_tokens(
-            #     logprob_info.previous_tokens + [top_token]
-            # )[-1]
-            detokenized = tokenizer.decode(top_token)
+    if logprob_info.top_token_ids is not None and logprob_info.top_logprobs is not None:
+        top_tokens = list(zip(logprob_info.top_token_ids, logprob_info.top_logprobs))
+        for top_token_id, top_logprob in top_tokens:
             top_logprobs.append(
                 TopLogprobs(
-                    token=detokenized,
+                    token=tokenizer.decode(top_token_id),
                     logprob=float(top_logprob),
                     # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
                     bytes=None,
@@ -166,7 +160,7 @@ def logprob_detokenize(
             )
 
     logprobs_content = LogprobsContent(
-        token=tokenizer.decode([logprob_info.current_token]),
+        token=tokenizer.decode([logprob_info.current_token_id]),
         logprob=logprob_info.current_logprob,
         # TODO(vvchernov): implement bytes based on https://platform.openai.com/docs/api-reference/chat/object
         bytes=None,
@@ -178,15 +172,15 @@ def logprob_detokenize(
 
 def logprobs_detokenize(
     tokenizer: TokenizerP,
-    logprob_info: List[Optional[RawLogprobsInfo]],
-) -> Optional[List[Optional[LogprobsContent]]]:
+    logprob_info: Optional[RawLogprobsInfos],
+) -> List[Optional[LogprobsContent]]:
+    if logprob_info is None:
+        return []
+
     res: List[Optional[LogprobsContent]] = []
     for info in logprob_info:
         res.append(logprob_detokenize(tokenizer, info))
 
-    check_all = all([x is None for x in res])
-    if check_all:
-        return None
     return res
 
 

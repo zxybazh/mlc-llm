@@ -17,11 +17,12 @@ RequestId = str
 
 @dataclass
 class RawLogprobsInfo:
-    current_token: int
+    current_token_id: int
     current_logprob: float
-    top_tokens: Optional[np.array]
+    top_token_ids: Optional[np.array]
     top_logprobs: Optional[np.array]
-    previous_tokens: Optional[List[int]]
+
+RawLogprobsInfos = List[Optional[RawLogprobsInfo]]
 
 
 # TODO(@sunggg): consider transition to something like Pydantic
@@ -166,7 +167,7 @@ class SequenceOutput:
     finish_reason: Optional[FinishReason] = None
     # Number of generated tokens so far
     num_generated_tokens: int = 0
-    logprob_info: Optional[List[Optional[LogprobsContent]]] = None
+    logprob_info: List[Optional[LogprobsContent]] = field(default_factory=list)
 
     @property
     def is_finished(self) -> bool:
@@ -176,7 +177,7 @@ class SequenceOutput:
 @dataclass
 class RequestOutput:
     request_id: RequestId
-    sequences: list[SequenceOutput]
+    sequences: List[SequenceOutput]
     # TODO: reconsider the place to put this number
     # Only set for outputs with valid sequence outputs
     num_prompt_tokens: Optional[int] = None

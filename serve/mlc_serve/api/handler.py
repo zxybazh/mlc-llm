@@ -43,6 +43,7 @@ def create_error_response(status_code: HTTPStatus, message: str) -> JSONResponse
 
 router = APIRouter()
 
+
 def _get_sampling_params(request: ChatCompletionRequest) -> SamplingParams:
     sampling_params = SamplingParams(
         # These params came from vllm
@@ -179,6 +180,7 @@ async def generate_completion_stream(
         ],
     )
     yield f"data: {json.dumps(first_chunk.dict(exclude_unset=True), ensure_ascii=False)}\n\n"
+
     async for res in result_generator:
         if res.error:
             raise RuntimeError(f"Error when generating: {res.error}")
@@ -194,7 +196,7 @@ async def generate_completion_stream(
                     finish_reason=seq.finish_reason.value
                     if seq.finish_reason is not None
                     else None,
-                    logprob_info=Logprobs(content=seq.logprob_info) if seq.logprob_info else None
+                    logprob_info=Logprobs(content=seq.logprob_info) if seq.logprob_info != [] else None
                 )
                 for seq in res.sequences
             ]
@@ -237,7 +239,7 @@ async def collect_result_stream(
             if seq.is_finished:
                 assert seq.finish_reason is not None
                 finish_reasons[seq.index] = seq.finish_reason.value  # type: ignore
-    
+
     choices = []
     for index, (logprob_info_seq, chunks, finish_reason) in enumerate(zip(logprob_infos, sequences, finish_reasons)):
         logprobs = None

@@ -1,6 +1,6 @@
 import math
 import os
-from typing import List, Union, Tuple, Sequence
+from typing import List, Optional, Union, Tuple, Sequence
 
 import structlog
 import numpy as np
@@ -18,11 +18,11 @@ from .model_common import (
 )
 
 from ..engine import (
-    SequenceId,
     PROMPT_SEQEUNCE_INDEX,
+    RawLogprobsInfos,
+    SequenceId,
     get_prompt_sequence_id,
     MLCServeEngineConfig,
-    RawLogprobsInfo,
 )
 from ..engine.model_module import (
     DecodeRequest,
@@ -85,9 +85,6 @@ def get_tvm_model(config, dev):
 
     return load_disco_module(config.model_artifact_path, lib_path, config.num_shards)
 
-def attach_detokenization_info(logprob_info:RawLogprobsInfo, token_ids: List[int]):
-    logprob_info.previous_tokens = token_ids
-    return logprob_info
 
 def _prepare_inputs(
     sequence_ids,
@@ -206,6 +203,16 @@ class Model:
         self.mod["evaluate"](input_ids, positions, seq_lens, self.params)
 
         return self.get_used_memory()
+
+    def get_logprob_infos(
+        self,
+        i: int,
+        logprob_infos: Optional[RawLogprobsInfos],
+    ) -> Optional[RawLogprobsInfos]:
+        if logprob_infos is None or logprob_infos[i] is None:
+            return None
+        return [logprob_infos[i]]
+
 
     def generate(
         self,
@@ -332,8 +339,8 @@ class Model:
             next_tokens, logprob_infos = sample(logits, sampling_params, self.vocab_size)
             assert next_tokens is not None
             outputs = []
-            for i, (sequence_id, new_token, token_ids) in enumerate(
-                zip(sequence_ids, next_tokens, all_token_ids)
+            for i, (sequence_id, new_token) in enumerate(
+                zip(sequence_ids, next_tokens)
             ):
                 if not new_token in requests[i].sampling_params.appeared_tokens_freq:
                     requests[i].sampling_params.appeared_tokens_freq[new_token] = 0
@@ -345,22 +352,18 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
-                                logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
+                                logprob_info=self.get_logprob_infos(i, logprob_infos),
                             )
                         )
-                        # if logprob_infos[i]:
-                        #     token_ids.append(new_token)
                 else:
                     outputs.append(
                         TextGenerationResult(
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
-                            logprob_info=[attach_detokenization_info(logprob_infos[i], token_ids) if logprob_infos[i] else None],
+                            logprob_info=self.get_logprob_infos(i, logprob_infos),
                         )
                     )
-                    # if logprob_infos[i]:
-                    #     token_ids.append(new_token)
 
             return outputs
         except RuntimeError:
@@ -398,7 +401,7 @@ class Model:
                                     ),
                                     generated_tokens=[new_token],  # type: ignore
                                     error=None,
-                                    logprob_info=[logprob_infos[0]]
+                                    logprob_info=self.get_logprob_infos(0, logprob_infos),
                                 )
                             )
                     else:
@@ -407,7 +410,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[new_token],  # type: ignore
                                 error=None,
-                                logprob_info=[logprob_infos[0]]
+                                logprob_info=self.get_logprob_infos(0, logprob_infos),
                             )
                         )
                 else:
@@ -420,7 +423,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
-                                    logprob_info=[logprob_infos[0]]
+                                    logprob_info=self.get_logprob_infos(0, logprob_infos),
                                 )
                             )
                     else:
@@ -429,7 +432,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
-                                logprob_info=[logprob_infos[0]]
+                                logprob_info=self.get_logprob_infos(0, logprob_infos),
                             )
                         )
 
