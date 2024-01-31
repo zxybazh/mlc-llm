@@ -11,6 +11,7 @@ from ..engine import (
     SamplingParams,
     LOGPROB_TOP_K_MAX,
     RawLogprobsInfo,
+    RawLogprobsInfos,
 )
 
 LOG = structlog.stdlib.get_logger(__name__)
@@ -90,11 +91,11 @@ def get_logprob_indices(
 
 
 def get_raw_logprob_infos(
-    logprob_infos: List[Optional[RawLogprobsInfo]],
+    logprob_infos: RawLogprobsInfos,
     indices: List[Tuple[int, int, int]],
     logits: torch.Tensor,
     token_ids: torch.Tensor,
-) -> List[Optional[RawLogprobsInfo]]:
+) -> RawLogprobsInfos:
     for (i, ind, top_logprobs) in indices:
         logprob_infos[i] = get_raw_logprob_info(
             logits[ind],
@@ -103,6 +104,19 @@ def get_raw_logprob_infos(
         )
 
     return logprob_infos
+
+
+def check_logprob_infos(
+    logprob_infos: RawLogprobsInfos,
+) -> Optional[RawLogprobsInfos]:
+    check = False
+    for info in logprob_infos:
+        if info is not None:
+            check = True
+            break
+    if check:
+        return logprob_infos
+    return None
 
 
 def _apply_top_p_top_k(logits, top_ps, top_ks):
@@ -133,7 +147,7 @@ def sample(
     sampling_params: List[SamplingParams],
     vocab_size: int,
     check_safety=False,
-) -> Optional[Tuple[np.ndarray, List[Optional[RawLogprobsInfo]]]]:
+) -> Optional[Tuple[np.ndarray, Optional[RawLogprobsInfos]]]:
     def _is_safe_to_sample(prob_like):
         return (
             torch.sum(torch.isnan(prob_like) | torch.isinf(prob_like) | (prob_like < 0))
@@ -158,7 +172,7 @@ def sample(
 
     logits_greedy = logits[mask_greedy_dvc]
 
-    logprob_infos: List[Optional[RawLogprobsInfo]] = [None] * num_seq
+    logprob_infos: RawLogprobsInfos = [None] * num_seq
     lgp_inds_greedy, lgp_inds_random = get_logprob_indices(
         sampling_params,
         num_seq,
@@ -177,7 +191,7 @@ def sample(
         # Case when there's only greedy sampling
         if logits_greedy.shape[0] == num_seq:
             torch.cuda.nvtx.range_pop()
-            return res_greedy, logprob_infos
+            return res_greedy, check_logprob_infos(logprob_infos)
 
     temperatures = []
     top_ps = []
@@ -256,7 +270,7 @@ def sample(
     # Case when there's only random sampling
     if logits_random.shape[0] == num_seq:
         torch.cuda.nvtx.range_pop()
-        return res_random, logprob_infos
+        return res_random, check_logprob_infos(logprob_infos)
 
     res = np.empty((num_seq,), dtype=np.int32)
     res[mask_random_cpu] = res_random
@@ -265,7 +279,7 @@ def sample(
         res[mask_greedy_cpu] = res_greedy
 
     torch.cuda.nvtx.range_pop()
-    return res, logprob_infos
+    return res, check_logprob_infos(logprob_infos)
 
 
 def prepare_inputs(

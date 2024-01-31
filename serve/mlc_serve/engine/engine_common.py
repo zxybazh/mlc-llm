@@ -12,6 +12,7 @@ import structlog
 from .base import (
     GenerationSequence,
     RawLogprobsInfo,
+    RawLogprobsInfos,
     Request,
     RequestId,
     RequestState,
@@ -171,8 +172,11 @@ def logprob_detokenize(
 
 def logprobs_detokenize(
     tokenizer: TokenizerP,
-    logprob_info: List[Optional[RawLogprobsInfo]],
+    logprob_info: Optional[RawLogprobsInfos],
 ) -> List[Optional[LogprobsContent]]:
+    if logprob_info is None:
+        return []
+
     res: List[Optional[LogprobsContent]] = []
     for info in logprob_info:
         res.append(logprob_detokenize(tokenizer, info))

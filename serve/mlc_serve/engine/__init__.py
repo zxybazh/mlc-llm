@@ -17,5 +17,6 @@ from .base import (
     PROMPT_SEQEUNCE_INDEX,
     get_prompt_sequence_id,
     RawLogprobsInfo,
+    RawLogprobsInfos,
 )
 from .sampling_params import SamplingParams, SamplingType, LOGPROB_TOP_K_MAX

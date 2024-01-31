@@ -22,6 +22,8 @@ class RawLogprobsInfo:
     top_token_ids: Optional[np.array]
     top_logprobs: Optional[np.array]
 
+RawLogprobsInfos = List[Optional[RawLogprobsInfo]]
+
 
 # TODO(@sunggg): consider transition to something like Pydantic
 @dataclass

@@ -12,7 +12,7 @@ import structlog
 
 from .base import (
     FinishReason,
-    RawLogprobsInfo,
+    RawLogprobsInfos,
     RequestId,
     RequestState,
     ValidationError,
@@ -66,7 +66,7 @@ class SequenceGenerationOutput:
     new_tokens: List[int]
     finish_reason: Optional[FinishReason] = None
     error: Optional[Union[str, ValidationError]] = None
-    logprob_info: List[RawLogprobsInfo] = field(default_factory=list)
+    logprob_info: Optional[RawLogprobsInfos] = None
 
 
 @dataclass

@@ -1,6 +1,6 @@
 import math
 import os
-from typing import List, Union, Tuple, Sequence
+from typing import List, Optional, Union, Tuple, Sequence
 
 import structlog
 import numpy as np
@@ -18,8 +18,9 @@ from .model_common import (
 )
 
 from ..engine import (
-    SequenceId,
     PROMPT_SEQEUNCE_INDEX,
+    RawLogprobsInfos,
+    SequenceId,
     get_prompt_sequence_id,
     MLCServeEngineConfig,
 )
@@ -203,6 +204,16 @@ class Model:
 
         return self.get_used_memory()
 
+    def get_logprob_infos(
+        self,
+        i: int,
+        logprob_infos: Optional[RawLogprobsInfos],
+    ) -> Optional[RawLogprobsInfos]:
+        if logprob_infos is None or logprob_infos[i] is None:
+            return None
+        return [logprob_infos[i]]
+
+
     def generate(
         self,
         requests: Sequence[Union[PrefillRequest, DecodeRequest]],
@@ -341,7 +352,7 @@ class Model:
                                 sequence_id=SequenceId(sequence_id.request_id, seq_id),
                                 generated_tokens=[new_token],
                                 error=None,
-                                logprob_info=[logprob_infos[i]],
+                                logprob_info=self.get_logprob_infos(i, logprob_infos),
                             )
                         )
                 else:
@@ -350,7 +361,7 @@ class Model:
                             sequence_id=sequence_id,
                             generated_tokens=[new_token],
                             error=None,
-                            logprob_info=[logprob_infos[i]],
+                            logprob_info=self.get_logprob_infos(i, logprob_infos),
                         )
                     )
 
@@ -390,7 +401,7 @@ class Model:
                                     ),
                                     generated_tokens=[new_token],  # type: ignore
                                     error=None,
-                                    logprob_info=logprob_infos
+                                    logprob_info=self.get_logprob_infos(0, logprob_infos),
                                 )
                             )
                     else:
@@ -399,7 +410,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[new_token],  # type: ignore
                                 error=None,
-                                logprob_info=logprob_infos
+                                logprob_info=self.get_logprob_infos(0, logprob_infos),
                             )
                         )
                 else:
@@ -412,7 +423,7 @@ class Model:
                                     ),
                                     generated_tokens=[],
                                     error=err_msg,
-                                    logprob_info=logprob_infos
+                                    logprob_info=self.get_logprob_infos(0, logprob_infos),
                                 )
                             )
                     else:
@@ -421,7 +432,7 @@ class Model:
                                 sequence_id=sequence_id,
                                 generated_tokens=[],
                                 error=err_msg,
-                                logprob_info=logprob_infos
+                                logprob_info=self.get_logprob_infos(0, logprob_infos),
                             )
                         )
 
