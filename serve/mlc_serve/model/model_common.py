@@ -57,7 +57,7 @@ def prepare_textgen_result(
     outputs = []
     if sequence_id.sequence_index == PROMPT_SEQEUNCE_INDEX:
         assert isinstance(request, PrefillRequest)
-        for seq_id in range(request.num_sequence):  # type: ignore
+        for seq_id in range(request.num_sequence):
             outputs.append(
                 TextGenerationResult(
                     sequence_id=SequenceId(sequence_id.request_id, seq_id),

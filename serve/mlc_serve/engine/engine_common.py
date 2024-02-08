@@ -94,7 +94,7 @@ def detokenize_incrementally(
     # This is the first iteration for this sequence
     if generation_sequence.prev_tokens is None:
         # TODO(masahi): Figure out a way to remove this concat
-        new_tokens: List[str] = tokenizer.convert_ids_to_tokens(  # type: ignore
+        new_tokens = tokenizer.convert_ids_to_tokens(
             prompt_tokens + generation_sequence.generated_token_ids
         )
         output_tokens = new_tokens
@@ -110,7 +110,7 @@ def detokenize_incrementally(
             prefix_end_offset = max(len(output_tokens) - 1, 0)
     else:
         # Put new_token_id in a list so skip_special_tokens is respected
-        new_tokens: List[str] = tokenizer.convert_ids_to_tokens(  # type: ignore
+        new_tokens = tokenizer.convert_ids_to_tokens(
             [new_token_id]
         )
         output_tokens = generation_sequence.prev_tokens + new_tokens

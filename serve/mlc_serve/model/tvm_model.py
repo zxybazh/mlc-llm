@@ -299,7 +299,7 @@ class Model:
         return sample_from_logits(
             last_query_logits,
             sequence_ids,
-            requests,  # type: ignore
+            requests,
             sampling_metadata,
             self.vocab_size,
             self._copy_stream,

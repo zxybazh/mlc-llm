@@ -220,6 +220,6 @@ class TokenizerModule(Protocol):
         ...
 
 
-class ModelModule(TextTokenGeneratorModule, TokenizerModule):
+class ModelModule(TextTokenGeneratorModule, TokenizerModule, Protocol):
     model_artifact_config: ModelArtifactConfig
     engine_config: MLCServeEngineConfig
