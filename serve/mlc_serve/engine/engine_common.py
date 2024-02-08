@@ -32,6 +32,7 @@ from .model_module import (
 )
 from ..model.base import ModelArtifactConfig
 from ..openai_logprob_protocol import LogprobsContent, TopLogprobs
+from .constrained_sampling import JSONLogitsProcessor
 
 LOG = structlog.stdlib.get_logger(__name__)
 
@@ -240,7 +241,9 @@ def prepare_output(
 
 
 def get_requests_to_process(
-    current_states: list[RequestState], cache_manager: KVCacheManager
+    current_states: list[RequestState],
+    cache_manager: KVCacheManager,
+    tokenizer: TokenizerP,
 ) -> Tuple[list[RequestType], bool, int]:
     requests: list[RequestType] = []
     # TODO: consider having hybrid batch if the underlying attention kernel supports
@@ -289,6 +292,12 @@ def get_requests_to_process(
                 # TODO(masahi): How to account for token counts in EvalMultiQueryRequest in
                 # Prometheus metric?
             elif not state.is_prefilled:
+                # `JSONLogitsProcessor` needs to be created only once.
+                if state.sampling_params.json_schema is not None:
+                    state.sampling_params.logits_processor = JSONLogitsProcessor(
+                        state.sampling_params.json_schema, tokenizer._tokenizer
+                    )
+
                 if (
                     state.num_sequences == 1
                     and state.generation_sequences[0].generated_token_ids
