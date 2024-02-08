@@ -326,7 +326,7 @@ class MoE(nn.Module):
             local_top_k = T.alloc_buffer((2,), dtype=self.dtype, scope="local")
             local_top_k_index = T.alloc_buffer((2,), dtype=index_dtype, scope="local")
             local_top_k_f32 = T.alloc_buffer((2,), dtype="float32", scope="local")
-            local_top_k_max = T.alloc_buffer((1,), dtype=self.dtype, scope="local")
+            local_top_k_max = T.alloc_buffer((1,), dtype="float32", scope="local")
             T.func_attr({"tir.noalias": True, "tir.is_scheduled": True})
             for io in T.thread_binding(0, T.ceildiv(total_rows, T.int64(1024)), "blockIdx.x"):
                 for ii in T.thread_binding(0, T.min(total_rows, T.int64(1024)), "threadIdx.x"):
