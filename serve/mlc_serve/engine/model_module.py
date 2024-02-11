@@ -170,7 +170,8 @@ class TextGenerator(Protocol):
 class Tokenizer(Protocol):
     _tokenizer: Any
     eos_token_id: int
-    skip_special_tokens: bool
+    skip_special_tokens: bool # for decoder
+    add_special_tokens: bool # for encoder
     all_special_ids: List[int]
     is_fast: bool
 
