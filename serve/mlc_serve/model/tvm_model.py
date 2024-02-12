@@ -95,6 +95,7 @@ def _prepare_inputs(
     all_decode_block_tables,
     sliding_window,
     is_prefill,
+    num_decode_query_tokens=1,
 ):
     (
         input_ids,
@@ -111,12 +112,16 @@ def _prepare_inputs(
         all_decode_block_tables,
         sliding_window,
         is_prefill,
+        num_decode_query_tokens,
     )
 
     if block_tables is not None:
         block_tables = tvm.nd.from_dlpack(block_tables)
     if indices_within_window is not None:
         indices_within_window = tvm.nd.from_dlpack(indices_within_window)
+
+    if not is_prefill and num_decode_query_tokens > 1:
+        input_ids = torch.reshape(input_ids, (-1, num_decode_query_tokens))
 
     return (
         tvm.nd.from_dlpack(input_ids),
@@ -131,8 +136,10 @@ def _prepare_inputs(
 class Model:
     def __init__(
         self,
-        config,
-        dev,
+        config: ModelArtifactConfig,
+        dev: tvm.runtime.Device,
+        block_size: int,
+        copy_blocks_func_name: str,
     ):
         self.mod, self.params, self.disco_session = get_tvm_model(config, dev)
         self.dev = dev
@@ -152,7 +159,7 @@ class Model:
         self.torch_dev: str = "cuda"
 
         if self.sliding_window:
-            self.block_sliding_window = self.sliding_window // CacheManager.block_size
+            self.block_sliding_window = self.sliding_window // block_size
         else:
             self.block_sliding_window = None
 
@@ -162,7 +169,7 @@ class Model:
             )
         else:
             self.copy_cache_blocks_func = tvm.get_global_func(
-                "tvm.contrib.vllm.copy_blocks"
+                copy_blocks_func_name,
             )
 
         self.cache_blocks = None
@@ -328,6 +335,9 @@ class Model:
         all_token_ids = []
         sequence_ids = []
         prompt_lens = []
+        # TODO(masahi, yelite): Update this when a new request type for speculative decoding
+        # is implemented.
+        num_decode_query_tokens = 1
         sampling_params = []
         past_decode_tokens = []
 
@@ -383,6 +393,7 @@ class Model:
             cache.decode_block_tables,
             self.sliding_window,
             is_prefill,
+            num_decode_query_tokens,
         )
 
         input_shape = input_ids.shape
@@ -425,15 +436,26 @@ class Model:
             if self.disco_session:
                 block_tables = copy_to_worker_0(self.disco_session, block_tables)
 
-            out = self.mod["decode"](
-                input_ids,
-                positions,
-                seq_lens,
-                self.cache_blocks,
-                slot_mapping,
-                block_tables,
-                self.params,
-            )
+            if num_decode_query_tokens is not None and num_decode_query_tokens > 1:
+                out = self.mod["decode_multi_query"](
+                    input_ids,
+                    positions,
+                    seq_lens,
+                    self.cache_blocks,
+                    slot_mapping,
+                    block_tables,
+                    self.params,
+                )
+            else:
+                out = self.mod["decode"](
+                    input_ids,
+                    positions,
+                    seq_lens,
+                    self.cache_blocks,
+                    slot_mapping,
+                    block_tables,
+                    self.params,
+                )
 
         if self.disco_session:
             logits, _ = out.debug_get_from_remote(0)
@@ -461,6 +483,10 @@ class Model:
             self.copy_cache_blocks_func(self.cache_blocks, block_mapping)
             cache.pending_copy_from_to = []
 
+        if len(logits.shape) == 3:
+            # TODO(masahi, yelite): Proper logic for handling multi-query logits (speculative decoding).
+            return []
+
         return sample_from_logits(
             logits,
             sequence_ids,
@@ -479,11 +505,6 @@ def init_tvm_model(
 ) -> Tuple[TextGenerator, CacheManager]:
     dev = tvm.device("cuda", 0)
 
-    model = Model(model_artifact_config, dev)
-
-    if model_artifact_config.num_shards > 1:
-        model.disco_session.sync_worker_0()
-
     num_kv_heads = (
         model_artifact_config.num_key_value_heads // model_artifact_config.num_shards
     )
@@ -491,11 +512,32 @@ def init_tvm_model(
         model_artifact_config.hidden_size // model_artifact_config.num_attention_heads
     )
 
+    if model_artifact_config.paged_kv_cache_type == "flash-decoding":
+        allocate_func_name = "tvm.contrib.flash_attn.allocate_kv_cache"
+        copy_blocks_func_name = "tvm.contrib.flash_attn.copy_blocks"
+        # This needs to match with the model definition in llama_batched_vllm.py
+        if head_size <= 64:
+            block_size = 256
+        elif head_size <= 128:
+            block_size = 128
+        else:
+            block_size = 64
+    else:
+        allocate_func_name = "tvm.contrib.vllm.allocate_kv_cache"
+        copy_blocks_func_name = "tvm.contrib.vllm.copy_blocks"
+        block_size = 16
+
+    model = Model(model_artifact_config, dev, block_size, copy_blocks_func_name)
+
+    if model_artifact_config.num_shards > 1:
+        model.disco_session.sync_worker_0()
+
     if engine_config.max_num_batched_tokens > 0:
         LOG.info("Running memory profiling.")
         try:
             num_blocks = get_num_cache_blocks(
                 model,
+                block_size,
                 [1] * engine_config.max_num_batched_tokens,
                 model_artifact_config.num_hidden_layers,
                 num_kv_heads,
@@ -509,7 +551,7 @@ def init_tvm_model(
     else:
         num_blocks = 500
 
-    num_cache_slots = num_blocks * CacheManager.block_size
+    num_cache_slots = num_blocks * block_size
 
     if num_cache_slots <= engine_config.max_num_batched_tokens:
         raise RuntimeError(
@@ -523,18 +565,16 @@ def init_tvm_model(
     LOG.info(f"Using {num_blocks} cache blocks.")
 
     if model.disco_session:
-        init_cache_func = model.disco_session.get_global_func(
-            "tvm.contrib.vllm.allocate_kv_cache"
-        )
+        init_cache_func = model.disco_session.get_global_func(allocate_func_name)
     else:
-        init_cache_func = tvm.get_global_func("tvm.contrib.vllm.allocate_kv_cache")
+        init_cache_func = tvm.get_global_func(allocate_func_name)
 
     try:
         model.cache_blocks = init_cache_func(
             head_size,
             model_artifact_config.num_hidden_layers,
             num_kv_heads,
-            CacheManager.block_size,
+            block_size,
             num_blocks,
         )
     except tvm.error.InternalError:
@@ -542,6 +582,7 @@ def init_tvm_model(
 
     cache_manager = CacheManager(
         num_blocks,
+        block_size,
         model_artifact_config.sliding_window,
     )
 
