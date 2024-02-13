@@ -8,8 +8,8 @@ class Tokenizer:
     def __init__(
             self,
             hf_tokenizer,
-            skip_special_tokens=True, # for decoder
-            add_special_tokens=False # for encoder
+            skip_special_tokens=True, # for decode function
+            add_special_tokens=False # for encode function
         ):
         self._tokenizer = hf_tokenizer
         self.eos_token_id = self._tokenizer.eos_token_id
